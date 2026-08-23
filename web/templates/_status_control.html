@@ -1,0 +1,11 @@
+<div class="status-control" id="status-{{ v.uuid }}">
+  {% for s in USER_STATUSES %}
+  <button
+    class="status-btn {{ 'active' if v.user_status == s else '' }} status-{{ s }}"
+    hx-post="/vacancy/{{ v.uuid }}/status"
+    hx-vals='{"user_status": "{{ s }}"}'
+    hx-target="#status-{{ v.uuid }}"
+    hx-swap="outerHTML settle:180ms"
+  >{{ STATUS_LABELS[s] }}</button>
+  {% endfor %}
+</div>

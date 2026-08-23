@@ -1,0 +1,15 @@
+<span id="flag-{{ v.uuid }}" class="flag-wrap">
+  <button
+    class="flag-btn {{ 'active' if v.flagged_at else '' }}"
+    hx-post="/vacancy/{{ v.uuid }}/flag"
+    hx-target="#flag-{{ v.uuid }}"
+    hx-swap="outerHTML settle:180ms"
+    title="{{ 'Позначено як помилку — натисни, щоб зняти позначку' if v.flagged_at else 'Ця вакансія тут помилково — повідом розробнику' }}"
+    aria-label="{{ 'Позначено як помилку' if v.flagged_at else 'Позначити як помилку' }}"
+  >
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 1.5v13"/>
+      <path d="M3 2.5h9l-2.2 2.75L12 8H3"/>
+    </svg>
+  </button>
+</span>

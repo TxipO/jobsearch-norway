@@ -1,0 +1,14 @@
+{
+  "_comment": "Copy this file to personal.json (which is gitignored) and fill in real data. The CV/søknad builders read personal.json. Only facts you actually have — leave a field as an empty string or empty list if you don't want it shown; the builder omits empty sections rather than printing a placeholder. photo_path is relative to the repo root; leave empty to render the plain two-line header with no photo/table layout. hobbies_no is the Norwegian-language CV's hobbies list — falls back to hobbies (untranslated) if omitted. home_latitude/home_longitude feed reachability.py's public-transport travel-time badge — omit them and it falls back to Oslo (harmless, just makes every badge read like a long trip).",
+  "name": "[First name] [Surname]",
+  "phone": "+47 XXX XX XXX",
+  "email": "you@example.com",
+  "address_line": "[postal code] [City]",
+  "linkedin": "",
+  "photo_path": "",
+  "hobbies": [],
+  "hobbies_no": [],
+  "learning_norwegian_now": true,
+  "home_latitude": 59.911491,
+  "home_longitude": 10.757933
+}

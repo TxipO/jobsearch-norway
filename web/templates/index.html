@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1 class="sr-only">Список вакансій</h1>
+
+<div class="sync-bar">
+  <form method="post" action="/sync" onsubmit="const b=this.querySelector('button'); b.disabled=true; b.textContent='Синхронізація… (може тривати до кількох хвилин)';">
+    <button type="submit" class="sync-btn">Sync now</button>
+  </form>
+  {% if last_sync %}
+  <div class="sync-status">
+    <div class="sync-time">Останній sync: {{ last_sync.at }}</div>
+    <div class="sync-stats">
+      <span class="sync-stat" title="Порівняно з попередньою синхронізацією — NAV віддає лише зміни (інкрементальний фід)">
+        NAV: <strong>+{{ last_sync.stats.active_upserted }}</strong> нових/оновлених · <strong>−{{ last_sync.stats.marked_inactive }}</strong> деактивовано
+      </span>
+      <span class="sync-stat" title="Jobbnorge не веде історію змін — це повний знімок усіх активних вакансій станом на зараз, а не порівняння з минулим sync">
+        Jobbnorge: <strong>{{ last_sync.jobbnorge.fetched if last_sync.jobbnorge else '—' }}</strong> активних зараз
+      </span>
+      <span class="sync-stat" title="Видалено з нашої бази остаточно">
+        Прибрано з бази: <strong>{{ last_sync.deleted_inactive|default(0) }}</strong> неактивних + <strong>{{ last_sync.deleted_expired|default(0) }}</strong> протермінованих без реакції + <strong>{{ last_sync.deleted_archived|default(0) }}</strong> зі Смітника
+      </span>
+    </div>
+    {% if last_sync.backup_failed %}
+    <div class="backup-warning" title="{{ last_sync.backup_failed }}">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 1.5l7 12.5H1z"/>
+        <path d="M8 6.5v3.5M8 12h.01"/>
+      </svg>
+      Бекап бази перед цим sync не вдався — дивись деталі в консолі сервера
+    </div>
+    {% endif %}
+    {# finn.no/easycruit fail independently of NAV/Jobbnorge (see /sync route's
+       try/except) and used to fail silently — the error sat in the stored
+       JSON summary but nothing ever rendered it. Live case 2026-08-09: finn's
+       Gmail token expired and the sync-bar kept showing a stale "0" count
+       with no indication anything was wrong. #}
+    {% for source_name, source_stats in [("finn.no", last_sync.finn), ("easycruit", last_sync.easycruit), ("LinkedIn", last_sync.linkedin)] %}
+    {% if source_stats and source_stats.error %}
+    <div class="backup-warning" title="{{ source_stats.error }}">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 1.5l7 12.5H1z"/>
+        <path d="M8 6.5v3.5M8 12h.01"/>
+      </svg>
+      {{ source_name }} не синхронізувався цього разу — наведи курсор для деталей
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% if last_sync.new_high_score %}<div class="high-score-alert"><span class="num">{{ last_sync.new_high_score }}</span> нових вакансій з високим скором!</div>{% endif %}
+  </div>
+  {% else %}
+  <span class="sync-status">Sync ще не запускався через інтерфейс</span>
+  {% endif %}
+</div>
+
+{% if excluded_count > 0 %}
+<div class="excluded-bar">
+  {% if show_excluded %}
+    Показано {{ excluded_count }} недосяжних вакансій (потрібна авторизація/освіта, якої нема).
+    <a href="/">Сховати їх</a>
+  {% else %}
+    Приховано {{ excluded_count }} вакансій, куди неможливо потрапити (медична авторизація, fagbrev, педагогічна освіта тощо).
+    <a href="/?show_excluded=1">Показати все одно</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if flagged_count > 0 %}
+<div class="excluded-bar">
+  {% if show_flagged %}
+    Показано {{ flagged_count }} позначених як помилка вакансій.
+    <a href="/">Сховати їх</a>
+  {% else %}
+    Приховано {{ flagged_count }} вакансій, позначених як помилка — Клод переглядає їх і виправляє причину.
+    <a href="/?show_flagged=1">Показати все одно</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{# Computed once, used for both the auto-open `open` attribute and the
+   badge dot below — code-review 2026-07-25: two copies of this expression
+   could silently drift apart (badge shows but panel doesn't auto-open, or
+   vice versa) whenever a new filter field is added. #}
+{% set has_active_filters = filters.sort != "score" or filters.language or filters.user_status or filters.source or filters.min_score or filters.min_extent_percent or filters.min_salary or filters.occupation_category %}
+<form class="filters" method="get" action="/">
+  <div class="filter-field filter-field-search">
+    <label for="f-q">Пошук</label>
+    <input type="text" id="f-q" name="q" placeholder="Назва, роботодавець, опис..." value="{{ filters.q }}">
+  </div>
+
+  {# Always-visible submit — code-review 2026-07-25: the only submit button
+     used to live inside the collapsed <details> panel below, so a
+     mouse-only user (no Enter key) had nothing clickable to submit the
+     form until they opened "Фільтри" for an unrelated reason. The
+     duplicate button inside the panel stays too, for adjusting filters
+     without closing it first. #}
+  <button type="submit" class="filters-submit filters-submit-main">Шукати</button>
+
+  {# Single "Фільтри" dropdown — everything but search lives here, including
+     sort (user feedback 2026-07-25: "зроби загальну кнопку Фільтри та в
+     ній всі, навіть сортування"). A floating panel (position: absolute in
+     CSS), not an inline-expand — inline expansion was pushing the submit
+     button into a stretched, ugly shape. Auto-opens if any field inside is
+     already active, so an applied filter never silently hides on reload. #}
+  <details class="filters-more" {{ "open" if has_active_filters else "" }}>
+    <summary>
+      Фільтри
+      {% if has_active_filters %}<span class="filters-badge"></span>{% endif %}
+    </summary>
+    <div class="filters-panel">
+      <div class="filter-row">
+        <label for="f-sort">Сортування</label>
+        <select id="f-sort" name="sort">
+          <option value="score" {{ "selected" if filters.sort == "score" }}>% відповідності</option>
+          <option value="deadline" {{ "selected" if filters.sort == "deadline" }}>Дедлайн</option>
+        </select>
+      </div>
+
+      <div class="filter-row">
+        <label for="f-language">Мова оголошення</label>
+        <select id="f-language" name="language">
+          <option value="">Будь-яка</option>
+          <option value="en" {{ "selected" if filters.language == "en" }}>English</option>
+          <option value="no" {{ "selected" if filters.language == "no" }}>Norsk</option>
+        </select>
+      </div>
+
+      <div class="filter-row filter-row-status">
+        <label>Статус</label>
+        <div class="status-checkboxes">
+          {% for s in USER_STATUSES %}
+          <label>
+            <input type="checkbox" name="user_status" value="{{ s }}" {{ "checked" if s in filters.user_status }}>
+            {{ STATUS_LABELS[s] }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <label for="f-source">Джерело</label>
+        <select id="f-source" name="source">
+          <option value="">Будь-яке</option>
+          {% for s in sources %}
+          <option value="{{ s }}" {{ "selected" if filters.source == s }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="filter-row">
+        <label for="f-occupation-category">Категорія професії (NAV)</label>
+        <select id="f-occupation-category" name="occupation_category">
+          <option value="">Будь-яка</option>
+          {% for c in OCCUPATION_CATEGORIES %}
+          <option value="{{ c }}" {{ "selected" if filters.occupation_category == c }}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="filter-row">
+        <label for="f-min-score">Мін. % відповідності (наш скоринг)</label>
+        <input type="number" id="f-min-score" name="min_score" placeholder="напр. 30" min="0" max="100" value="{{ filters.min_score }}">
+      </div>
+
+      <div class="filter-row">
+        <label for="f-min-extent">Мін. % зайнятості (ставка)</label>
+        <input type="number" id="f-min-extent" name="min_extent_percent" placeholder="напр. 80" min="0" max="100" value="{{ filters.min_extent_percent }}">
+      </div>
+
+      <div class="filter-row">
+        <label for="f-min-salary">Мін. зарплата, kr</label>
+        <input type="number" id="f-min-salary" name="min_salary" placeholder="напр. 500000" min="0" step="10000" value="{{ filters.min_salary }}">
+      </div>
+
+      <div class="filters-panel-actions">
+        <button type="submit" class="filters-submit">Фільтрувати</button>
+        <a href="/" class="filters-reset">Скинути</a>
+      </div>
+    </div>
+  </details>
+</form>
+
+<div class="results-count">Знайдено <span class="num">{{ total }}</span> вакансій</div>
+
+<div class="vacancy-list">
+  {% for v in vacancies %}
+  <div class="vacancy-row {{ 'vacancy-excluded' if v.excluded }}">
+    <div class="score-badge {{ 'score-high' if v.score >= 55 else ('score-mid' if v.score >= 25 else 'score-low') }}">
+      {{ v.score if v.score is not none else '—' }}%
+    </div>
+    <div class="vacancy-main">
+      <div class="vacancy-title-row">
+        <a class="vacancy-title" href="/vacancy/{{ v.uuid }}">{{ v.title }}</a>
+        {% if new_since and v.first_seen_at > new_since %}<span class="new-tag">Нове</span>{% endif %}
+        {% set due_days = v.application_due | days_until %}
+        {% if due_days is not none and due_days >= 0 and due_days <= 3 %}<span class="deadline-urgent-tag">{{ "Сьогодні!" if due_days == 0 else "Закривається за " ~ due_days ~ " дн." }}</span>{% endif %}
+      </div>
+      {% if v.excluded %}<div class="exclusion-tag">Недосяжно: {{ v.exclusion_reason }}</div>{% endif %}
+      <div class="vacancy-meta">
+        <span>{{ v.business_name }}</span>
+        <span class="sep">&middot;</span>
+        <span>{{ v.municipal }}{% if v.extent_percent %} &middot; <span class="num">{{ v.extent_percent }}%</span>{% endif %}</span>
+        {% if v.language %}<span class="sep">&middot;</span><span class="lang-tag">{{ v.language }}</span>{% endif %}
+        <span class="sep">&middot;</span>
+        <span class="source-tag">{{ v.source }}</span>
+        {% if v.application_due %}<span class="sep">&middot;</span><span>до <span class="num">{{ v.application_due | format_due | translate_value }}</span></span>{% endif %}
+        {% if v.salary_text %}<span class="sep">&middot;</span><span class="salary-tag num">{{ v.salary_text }}</span>{% endif %}
+        {% set source_url = v.application_url or v.link %}
+        {% if source_url %}
+        <span class="sep">&middot;</span>
+        <a class="source-link" href="{{ source_url }}" target="_blank" rel="noopener">Джерело &#8599;</a>
+        {% endif %}
+      </div>
+      <div class="row-controls">
+        {% include "_status_control.html" %}
+        {% if v.notes %}
+        <span class="notes-indicator" title="{{ v.notes }}">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2 3.5h12v7H6.5L3 13.5V10.5H2z"/>
+          </svg>
+          <span class="sr-only">Нотатка: {{ v.notes }}</span>
+        </span>
+        {% endif %}
+        {% include "_flag_control.html" %}
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <p class="empty">Нічого не знайдено. Спробуй інші фільтри.</p>
+  {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+{% set base_qs = "q=" ~ (filters.q|urlencode) ~ "&language=" ~ (filters.language|urlencode) ~ "&source=" ~ (filters.source|urlencode) ~ "&min_score=" ~ (filters.min_score|urlencode) ~ "&min_salary=" ~ (filters.min_salary|urlencode) ~ "&min_extent_percent=" ~ (filters.min_extent_percent|urlencode) ~ "&occupation_category=" ~ (filters.occupation_category|urlencode) ~ "&sort=" ~ (filters.sort|urlencode) ~ (("&show_excluded=1") if show_excluded else "") ~ (("&show_flagged=1") if show_flagged else "") %}
+{# Multi-select status — each pick round-trips as its own &user_status=x
+   pair, not a single urlencoded value like every other filter here.
+   `set` inside a for-loop doesn't leak out of the loop body in Jinja2 (a
+   real mistake caught while writing this, not a hypothetical) — namespace()
+   is the standard workaround. #}
+{% set ns = namespace(qs=base_qs) %}
+{% for s in filters.user_status %}{% set ns.qs = ns.qs ~ "&user_status=" ~ (s|urlencode) %}{% endfor %}
+{% set base_qs = ns.qs %}
+<div class="pagination">
+  {% if page > 1 %}<a href="/?{{ base_qs }}&page={{ page - 1 }}">&larr; Попередня</a>{% endif %}
+  <span>Сторінка {{ page }} з {{ total_pages }} ({{ total }} вакансій)</span>
+  {% if page < total_pages %}<a href="/?{{ base_qs }}&page={{ page + 1 }}">Наступна &rarr;</a>{% endif %}
+</div>
+{% endif %}
+
+<script>
+(function () {
+  // Auto-reload if a sync completes in another tab/window — the tab that
+  // clicks "Sync now" already gets a fresh page via the /sync redirect,
+  // this covers a second tab left open elsewhere with no other way to
+  // notice. Silent on failure — a missed poll just tries again in 30s.
+  const seenAt = {{ (last_sync.watermark_utc if last_sync else "")|tojson }};
+  setInterval(async () => {
+    try {
+      const resp = await fetch("/sync-status");
+      const data = await resp.json();
+      if (data.watermark_utc && data.watermark_utc !== seenAt) location.reload();
+    } catch (e) {}
+  }, 30000);
+})();
+</script>
+
+<script>
+(function () {
+  // Close the filters panel on an outside click — it previously only
+  // closed by clicking "Фільтри" again (native <details> toggle behavior).
+  // Clicks inside the panel (including the summary itself) are left alone
+  // since they're within .filters-more.
+  const panel = document.querySelector(".filters-more");
+  if (!panel) return;
+  document.addEventListener("click", (e) => {
+    if (panel.open && !panel.contains(e.target)) panel.open = false;
+  });
+})();
+</script>
+
+{% endblock %}

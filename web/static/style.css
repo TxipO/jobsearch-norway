@@ -1,0 +1,983 @@
+/* Canon executed at a Todoist / Vercel Dashboard craft bar (see PRODUCT.md
+   Brand Commitments, 2026-07-31) — no invented visual world, just a
+   restrained neutral+accent Operate dashboard done precisely: tabular-mono
+   numerals wherever a number is measured or compared, a tight 4px spacing
+   rhythm, sharp small radii, and real focus rings. Design language still
+   traces back to the original Budget-project ancestry (layered near-black
+   surfaces, muted low-opacity borders, tinted-background badges over solid
+   pills) — this pass tightens execution, it doesn't replace the bones. */
+
+:root {
+  --c-bg:          #F0F4F8;
+  --c-elevated:    #FFFFFF;
+  --c-raised:      #F7F9FC;
+  --c-border:      rgba(15,23,42,0.08);
+  --c-border-mid:  rgba(15,23,42,0.11);
+  --c-border-hi:   rgba(15,23,42,0.16);
+  --c-text:        #0F172A;
+  --c-text-sec:    #334155;
+  --c-text-muted:  #64748B;
+  --c-hover:       rgba(15,23,42,0.04);
+  --c-accent:      #2563EB;
+  --c-accent-text: #2563EB;
+  --c-success:     #16A34A;
+  --c-success-text:#16A34A;
+  --c-danger:      #DC2626;
+  --c-danger-text: #DC2626;
+  /* Per-status color coding for .status-btn (user-requested 2026-07-27) —
+     new/archived keep the default accent-blue, everything else gets its
+     own hue so the pipeline is scannable at a glance. */
+  --c-yellow:      #A15C00;
+  --c-yellow-text: #A15C00;
+  --c-orange:      #C2410C;
+  --c-orange-text: #C2410C;
+  --c-pink:        #BE185D;
+  --c-pink-text:   #BE185D;
+  --c-gray:        #6B7280;
+  --c-gray-text:   #6B7280;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --focus-ring: 0 0 0 2px var(--c-bg), 0 0 0 4px var(--c-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-bg:          #0A0A0F;
+    --c-elevated:    #12121A;
+    --c-raised:      #17171F;
+    --c-border:      rgba(255,255,255,0.07);
+    --c-border-mid:  rgba(255,255,255,0.1);
+    --c-border-hi:   rgba(255,255,255,0.14);
+    --c-text:        #F1F5F9;
+    --c-text-sec:    #CBD5E1;
+    --c-text-muted:  #94A3B8;
+    --c-hover:       rgba(255,255,255,0.05);
+    --c-accent:      #5B9BFF;
+    --c-accent-text: #93C5FD;
+    --c-success:     #4ADE80;
+    --c-success-text:#4ADE80;
+    --c-danger:      #F87171;
+    --c-danger-text: #FCA5A5;
+    --c-yellow:      #FACC15;
+    --c-yellow-text: #FDE047;
+    --c-orange:      #FB923C;
+    --c-orange-text: #FDBA74;
+    --c-pink:        #F472B6;
+    --c-pink-text:   #F9A8D4;
+    --c-gray:        #A1A1AA;
+    --c-gray-text:   #D4D4D8;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+
+/* Tabular numerals wherever a value is measured, ranked, or compared —
+   score, salary, %, dates, counts — never for prose. Todoist/Vercel-bar
+   requirement: digits must align in a column, not just look monospaced. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Screen-reader-only heading: pages whose visual identity already lives in
+   the topbar brand still need a real <h1> for heading-based AT navigation. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* htmx swap crossfade — the one authored motion moment in this app, applied
+   to the single most-repeated interaction (status/flag/notes updates).
+   `hx-swap="outerHTML settle:180ms"` on these three partials keeps htmx's
+   `.htmx-settling` class on the freshly-swapped node for 180ms; it starts
+   at opacity:0 and this transition carries it to 1, so the new state
+   materializes instead of popping in. No fade-out delay on the old node —
+   this fires on every status click, so latency loses to snappiness. */
+.status-control, .flag-wrap, .notes-control {
+  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.status-control.htmx-settling,
+.flag-wrap.htmx-settling,
+.notes-control.htmx-settling {
+  opacity: 0;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+.topbar {
+  padding: 0.875rem 1.5rem;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+  color: var(--c-text);
+  text-decoration: none;
+}
+
+.topnav { display: flex; gap: 1.25rem; }
+.topnav a {
+  color: var(--c-text-muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.2rem 0;
+  border-bottom: 2px solid transparent;
+  transition: color 130ms ease-out, border-color 130ms ease-out;
+}
+.topnav a:hover { color: var(--c-text); }
+.topnav a.active { color: var(--c-text); border-bottom-color: var(--c-accent); }
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+/* Kanban needs the whole viewport, not the 1100px reading-width column —
+   at 5 columns * 220px min it already overflows the constrained width and
+   forces an internal scrollbar. Scoped via :has() so no template change
+   is needed and every other page keeps its centered reading column. */
+main:has(.kanban-board) {
+  max-width: none;
+}
+
+/* ── Sync bar ── */
+
+/* Column, not row — the sync-status block (time + stat chips) has grown
+   past a single line and jostling it against the button on one row wrapped
+   awkwardly. Button stays on its own line, status flows underneath. */
+.sync-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.sync-btn {
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-md);
+  background: var(--c-accent);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: opacity 0.15s;
+}
+.sync-btn:hover { opacity: 0.88; }
+.sync-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  animation: sync-pulse 1.6s ease-in-out infinite;
+}
+
+/* Sync genuinely runs for minutes (see the button's own copy) — a slow
+   opacity pulse is real feedback that work is happening, not decoration.
+   Kept to opacity only (no scale/position) to stay calm; still gets a
+   reduced-motion fallback since it's a loop, even a mild one. */
+@keyframes sync-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-btn:disabled { animation: none; }
+}
+
+.sync-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--c-text-muted);
+  font-size: 0.8rem;
+}
+
+.sync-time { font-weight: 600; color: var(--c-text-sec); }
+
+.sync-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/* Pill-style chips, same visual language as .status-btn/.flag-btn — each
+   number gets its own scannable box instead of one run-on sentence, and a
+   tooltip explains what it actually means (esp. NAV's delta vs.
+   Jobbnorge's full-snapshot count, which look identical otherwise). Figures
+   set in tabular mono so +N/-N deltas line up like a real metric readout. */
+.sync-stat {
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-sm);
+  background: var(--c-raised);
+  cursor: help;
+}
+.sync-stat strong {
+  color: var(--c-text-sec);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.high-score-alert { color: var(--c-success-text); font-weight: 600; }
+.backup-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--c-danger-text);
+  font-weight: 600;
+}
+
+/* ── Excluded banner ── */
+
+.excluded-bar {
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 1rem;
+  background: var(--c-raised);
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-lg);
+  font-size: 0.82rem;
+  color: var(--c-text-muted);
+}
+.excluded-bar a { color: var(--c-accent-text); }
+
+/* ── Filters ── */
+
+.filters {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+/* Label above input for the search box — the one field that stays
+   always visible outside the "Фільтри" dropdown. */
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.filter-field label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--c-text-muted);
+}
+.filter-field-search { flex: 1; min-width: 200px; }
+.filter-field-search input { width: 100%; }
+
+.filters input, .filters select {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--c-border-hi);
+  border-radius: var(--radius-md);
+  background: var(--c-raised);
+  color: var(--c-text);
+  font-size: 0.85rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.filters input:focus, .filters select:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+.filters input[type="number"] { font-family: var(--font-mono); }
+
+/* ── Single "Фільтри" dropdown — sort + every filter but search lives
+   here (user feedback 2026-07-25: "зроби загальну кнопку Фільтри та в
+   ній всі, навіть сортування"). Floating panel (position: absolute), not
+   an inline expansion — inline-expand was reflowing the whole row and
+   stretching the submit button into an ugly shape. Auto-opens (via the
+   `open` attribute set in the template) when a field inside is already
+   active, so an applied filter never silently hides on reload. ── */
+
+.filters-more { position: relative; }
+
+.filters-more summary {
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--c-border-hi);
+  border-radius: var(--radius-md);
+  background: var(--c-raised);
+  color: var(--c-text-sec);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.filters-more summary::-webkit-details-marker { display: none; }
+.filters-more[open] summary { border-color: var(--c-accent); color: var(--c-accent-text); }
+
+.filters-badge {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-accent);
+}
+
+.filters-panel {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 20;
+  width: 300px;
+  /* code-review 2026-07-25: on narrow phones .filters-more (its anchor)
+     can be narrower than 300px — right:0 then pushes the panel's left
+     edge past the viewport, and main/body have no overflow-x guard, so
+     that dragged the whole page into horizontal scroll. Cap width to the
+     viewport itself, independent of the anchor's own width. */
+  max-width: calc(100vw - 2rem);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  background: var(--c-elevated);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.filter-row label {
+  font-size: 0.8rem;
+  color: var(--c-text-muted);
+  flex-shrink: 0;
+}
+.filter-row select, .filter-row input {
+  flex: 0 1 150px;
+  min-width: 0;
+}
+
+/* Multi-select status filter (2026-08-04) — checkboxes wrap onto their own
+   row under the label instead of sharing .filter-row's space-between
+   layout, which assumes one control on the right. */
+.filter-row-status {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+.status-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+}
+.status-checkboxes label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--c-text-sec);
+  cursor: pointer;
+  flex-shrink: initial;
+}
+
+.filters-submit, .apply-btn {
+  padding: 0.55rem 1rem;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--c-accent);
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+.filters-panel-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+.filters-panel-actions .filters-submit { flex: 1; margin-top: 0; }
+
+.filters-reset {
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--c-border-hi);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--c-text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  text-align: center;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 130ms ease-out, color 130ms ease-out;
+}
+.filters-reset:hover { background: var(--c-hover); color: var(--c-text-sec); }
+
+/* ── Vacancy list: grid rows, not loose flex ──
+   Score column redesigned as a precise metric cell (Vercel-dashboard bar):
+   tabular-mono digits, right-aligned, small color-tier dot instead of a
+   heavy tinted pill — the number itself carries the read, the dot backs it
+   up for color-blind scanning without repeating the color as background. */
+
+.vacancy-list {
+  background: var(--c-elevated);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.vacancy-excluded { opacity: 0.55; }
+
+.vacancy-row {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: start;
+  gap: 0.9rem;
+  padding: 0.85rem 1.1rem;
+  border-bottom: 1px solid var(--c-border);
+  text-decoration: none;
+  color: inherit;
+  transition: background-color 130ms ease-out;
+}
+.vacancy-row:last-child { border-bottom: none; }
+.vacancy-row:hover { background: var(--c-hover); }
+
+.score-badge {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 0.3rem 0;
+}
+.score-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.score-high { color: var(--c-success-text); }
+.score-high::before { background: var(--c-success); }
+.score-mid  { color: var(--c-accent-text); }
+.score-mid::before { background: var(--c-accent); }
+.score-low  { color: var(--c-text-muted); }
+.score-low::before { background: var(--c-text-muted); }
+
+.vacancy-main { min-width: 0; }
+
+.vacancy-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.vacancy-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--c-text);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.exclusion-tag {
+  display: inline-block;
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--c-danger-text);
+  font-weight: 600;
+}
+
+.new-tag, .deadline-urgent-tag {
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.new-tag {
+  background: color-mix(in srgb, var(--c-accent) 18%, transparent);
+  color: var(--c-accent-text);
+}
+.deadline-urgent-tag {
+  background: color-mix(in srgb, var(--c-danger) 15%, transparent);
+  color: var(--c-danger-text);
+}
+
+.vacancy-meta {
+  margin-top: 0.2rem;
+  color: var(--c-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+.vacancy-meta .sep { margin: 0 0.35rem; color: var(--c-text-muted); }
+.vacancy-meta .lang-tag { color: var(--c-text-muted); }
+.vacancy-meta .source-tag { color: var(--c-text-muted); }
+.vacancy-meta .salary-tag { color: var(--c-success-text); font-weight: 600; }
+.vacancy-meta a.source-link {
+  color: var(--c-accent-text);
+  text-decoration: none;
+}
+.vacancy-meta a.source-link:hover { text-decoration: underline; }
+
+/* ── Status control: compact ghost pills ── */
+
+.status-control {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+
+.status-btn {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+.status-btn:hover { background: var(--c-hover); color: var(--c-text-sec); }
+
+.status-btn.active {
+  background: color-mix(in srgb, var(--c-accent) 15%, transparent);
+  color: var(--c-accent-text);
+  border-color: transparent;
+}
+
+/* Per-status colors (user-requested 2026-07-27) — "new"/"archived" keep
+   the default accent-blue above; every other stage gets its own hue so
+   the pipeline reads at a glance without checking the label text. Each
+   `status-{{ s }}` class already existed on the button (see
+   _status_control.html) with no color hook until now. */
+.status-btn.active.status-interesting {
+  background: color-mix(in srgb, var(--c-yellow) 15%, transparent);
+  color: var(--c-yellow-text);
+}
+.status-btn.active.status-applied {
+  background: color-mix(in srgb, var(--c-orange) 15%, transparent);
+  color: var(--c-orange-text);
+}
+.status-btn.active.status-interview {
+  background: color-mix(in srgb, var(--c-pink) 15%, transparent);
+  color: var(--c-pink-text);
+}
+.status-btn.active.status-offer {
+  background: color-mix(in srgb, var(--c-success) 15%, transparent);
+  color: var(--c-success-text);
+}
+.status-btn.active.status-rejected {
+  background: color-mix(in srgb, var(--c-danger) 15%, transparent);
+  color: var(--c-danger-text);
+}
+.status-btn.active.status-ignored {
+  background: color-mix(in srgb, var(--c-gray) 15%, transparent);
+  color: var(--c-gray-text);
+}
+
+.row-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+.row-controls .status-control { margin-top: 0; }
+
+.flag-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem;
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-danger-text);
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+.flag-btn:hover { background: var(--c-hover); }
+.flag-btn.active {
+  background: color-mix(in srgb, var(--c-danger) 15%, transparent);
+  border-color: transparent;
+}
+
+/* ── Notes / comments ── */
+
+.notes-indicator {
+  display: inline-flex;
+  align-items: center;
+  color: var(--c-text-muted);
+  cursor: help;
+  line-height: 1;
+}
+
+.notes-control { margin-top: 0.7rem; }
+.notes-control form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.notes-textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-lg);
+  background: var(--c-raised);
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+.notes-textarea:focus { outline: none; border-color: var(--c-accent); }
+
+.notes-save-btn {
+  padding: 0.4rem 0.9rem;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--c-accent);
+  color: white;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 130ms ease-out;
+}
+.notes-save-btn:hover { opacity: 0.88; }
+
+.notes-saved-tag {
+  color: var(--c-text-muted);
+  font-size: 0.72rem;
+}
+
+/* ── Resume-prompt language toggle: same ghost-pill pattern as status-btn ── */
+
+.lang-toggle {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.75rem 0;
+}
+.lang-toggle a {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+.lang-toggle a:hover { background: var(--c-hover); color: var(--c-text-sec); }
+.lang-toggle a.active {
+  background: color-mix(in srgb, var(--c-accent) 15%, transparent);
+  color: var(--c-accent-text);
+  border-color: transparent;
+}
+
+/* margin-left:auto must go on the flex item itself (the span
+   _flag_control.html wraps its button in, for HTMX's swap target) — auto
+   margin on the nested button has no effect on the parent flex layout. */
+.detail-header > span:has(.flag-btn) { margin-left: auto; }
+
+/* ── Detail page ── */
+
+.empty { color: var(--c-text-muted); text-align: center; padding: 2.5rem; }
+
+.back-link {
+  color: var(--c-text-muted);
+  text-decoration: none;
+  display: inline-block;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  transition: color 130ms ease-out;
+}
+.back-link:hover { color: var(--c-text-sec); }
+
+.vacancy-detail {
+  background: var(--c-elevated);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 1.75rem;
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+.detail-header h1 { margin: 0; font-size: 1.35rem; }
+.vacancy-detail .score-badge { flex-shrink: 0; font-size: 1rem; padding: 0.4rem 0.8rem; }
+
+.vacancy-detail .vacancy-meta {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  white-space: normal;
+}
+
+.score-breakdown {
+  margin: 1.1rem 0;
+  padding: 0.85rem 1rem;
+  background: var(--c-raised);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  font-size: 0.85rem;
+}
+.score-breakdown summary { cursor: pointer; color: var(--c-text-muted); }
+.score-breakdown table { width: 100%; border-collapse: collapse; margin-top: 0.6rem; }
+.score-breakdown td { padding: 0.4rem 0.5rem; border-top: 1px solid var(--c-border); }
+.score-breakdown .detail-cell { color: var(--c-text-muted); font-size: 0.78rem; }
+.points-pos { color: var(--c-success-text); font-weight: 600; }
+.points-neg { color: var(--c-danger-text); font-weight: 600; }
+
+.vacancy-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.6rem;
+  margin: 1.1rem 0;
+  padding: 0.85rem 1rem;
+  background: var(--c-raised);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  font-size: 0.85rem;
+}
+.vacancy-facts strong { color: var(--c-text-sec); font-weight: 600; }
+.reach-none { color: var(--c-text-muted); }
+
+.borrowed-notice {
+  margin-top: 1.1rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--c-raised);
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-lg);
+  font-size: 0.82rem;
+  color: var(--c-text-muted);
+}
+.borrowed-notice a { color: var(--c-accent-text); }
+
+.description { margin-top: 1.5rem; color: var(--c-text-sec); }
+.description a { color: var(--c-accent-text); }
+
+.actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
+
+.resume-btn { background: var(--c-success); }
+.doc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--c-raised);
+  color: var(--c-text-sec);
+  border: 1px solid var(--c-border-hi);
+}
+
+.prompt-hint {
+  color: var(--c-text-muted);
+  font-size: 0.88rem;
+  max-width: 60ch;
+}
+
+#prompt-box {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--c-border-hi);
+  border-radius: var(--radius-lg);
+  background: var(--c-raised);
+  color: var(--c-text);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.results-count {
+  color: var(--c-text-muted);
+  font-size: 0.85rem;
+  margin: 0.8rem 0;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.2rem;
+  margin: 1.5rem 0;
+  color: var(--c-text-muted);
+  font-size: 0.85rem;
+}
+.pagination a { color: var(--c-accent-text); text-decoration: none; }
+.pagination a:hover { text-decoration: underline; }
+.pagination span { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ── Kanban ── */
+
+/* grid-auto-flow (not a hardcoded repeat(N, ...)) — the column count was
+   pinned to 5, matching USER_STATUSES minus "new" at the time. Adding a
+   6th status ("offer") made the 6th column wrap onto a second implicit
+   row instead of sitting in-line, breaking the "one row of columns" board
+   entirely. Auto-flow sizes exactly as many columns as .kanban-column
+   elements exist, so the count can never drift out of sync with the
+   status list again. */
+.kanban-board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  gap: 0.9rem;
+  overflow-x: auto;
+  align-items: start;
+}
+
+.kanban-column {
+  background: var(--c-elevated);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  padding: 0.75rem;
+  min-width: 220px;
+}
+
+.kanban-column-header {
+  font-weight: 700;
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+  color: var(--c-text-sec);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.kanban-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+  color: var(--c-text-muted);
+  font-weight: 500;
+}
+
+.kanban-cards { display: flex; flex-direction: column; gap: 0.55rem; }
+
+.kanban-card {
+  background: var(--c-raised);
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-lg);
+  padding: 0.6rem 0.7rem;
+}
+
+.kanban-card-title {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--c-text);
+  text-decoration: none;
+  margin-bottom: 0.2rem;
+  transition: color 130ms ease-out;
+}
+.kanban-card-title:hover { color: var(--c-accent-text); }
+
+.kanban-card-meta {
+  font-size: 0.72rem;
+  color: var(--c-text-muted);
+  margin-bottom: 0.4rem;
+}
+.kanban-card-meta .sep { margin: 0 0.3rem; }
+
+.kanban-card .status-control { margin-top: 0.4rem; }
+
+.kanban-empty {
+  color: var(--c-text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 0.5rem 0;
+}
+
+/* ── Responsive ── */
+
+@media (max-width: 640px) {
+  main { padding: 0.9rem; }
+  .topbar { padding: 0.8rem 1rem; }
+
+  .vacancy-row { grid-template-columns: 46px 1fr; padding: 0.75rem 0.9rem; }
+
+  .filters { flex-direction: column; align-items: stretch; }
+  .filters input[type="text"] { min-width: 0; }
+
+  .detail-header { gap: 0.6rem; }
+  .detail-header h1 { font-size: 1.15rem; }
+
+  .vacancy-facts { grid-template-columns: 1fr; }
+
+  .actions { flex-direction: column; align-items: stretch; }
+  .actions .apply-btn { text-align: center; }
+
+  .sync-bar .sync-btn { align-self: stretch; }
+
+  .topbar { flex-wrap: wrap; gap: 0.5rem; }
+
+  .kanban-board { grid-auto-flow: row; grid-auto-columns: unset; grid-template-columns: 1fr; }
+
+  /* Touch targets: desktop density (Todoist/Vercel bar) stays put, but on a
+     touch-primary viewport these three controls grow to the 44px minimum —
+     scoped narrowly instead of resizing every pill and diluting the density
+     that's the point of the redesign. */
+  .status-btn, .flag-btn, .notes-save-btn {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}

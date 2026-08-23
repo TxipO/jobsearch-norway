@@ -1,0 +1,20 @@
+data/
+credentials/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+package-lock.json
+_check/
+# Impeccable design-tool working state/cache, not a deliverable.
+.impeccable/
+# Real personal contact data (name/phone/email/address) — never in git.
+profile/personal.json
+# Headshot photo used in the CV header — personal image, never in git.
+# Wildcard (not just the bare name) so a stray .bak/copy never slips in
+# either — caught live 2026-08-21: an untracked profile/photo.jpg.bak sat
+# right next to this rule, which only matched the exact filename.
+profile/photo.jpg*
+# Generated CV/søknad docx are personal application artifacts, keep local.
+profile/generated/
