@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Jobsearch Norway{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="/static/style.css?v={{ STATIC_VERSION }}">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <!--
+    THESIS: canon done right — a precise, restrained operate dashboard; no invented visual world, only the category standard executed at Todoist/Vercel's craft level.
+    OWN-WORLD: near-black/crisp cool-neutral surfaces + one accent; Inter for UI text, JetBrains Mono tabular-nums for every number; tight sub-8px rhythm; crisp 1px borders; sharp small radii (6-10px, no radius above 10px in-scope); visible focus rings.
+    STORY: user scans dense vacancy rows fast, trusts every number is precise and auditable, triages via colored status pills, never loses track of what's blocked or flagged.
+    FIRST VIEWPORT: sync bar, filters, then a tight bordered list — score column in mono numerals left, title/meta/status right, one hairline divider per row.
+    FORM: canon (category standard), craft bar = Todoist + Vercel Dashboard; seed ec02fd64, round 2 (user chose canon over the rolled/challenger directions both rounds).
+    FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md.
+  -->
+  <header class="topbar">
+    <a href="/" class="brand">Jobsearch Norway</a>
+    <nav class="topnav">
+      <a href="/" {{ 'aria-current="page" class="active"' | safe if request.url.path == "/" }}>Список</a>
+      <a href="/kanban" {{ 'aria-current="page" class="active"' | safe if request.url.path == "/kanban" }}>Kanban</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ v.title }} — Jobsearch Norway{% endblock %}
+{% block content %}
+
+<a href="/" class="back-link">&larr; До списку</a>
+
+<article class="vacancy-detail">
+  <div class="detail-header">
+    <div class="score-badge {{ 'score-high' if v.score >= 55 else ('score-mid' if v.score >= 25 else 'score-low') }}">
+      {{ v.score if v.score is not none else '—' }}%
+    </div>
+    <h1>{{ v.title }}</h1>
+    {% include "_flag_control.html" %}
+  </div>
+  <div class="vacancy-meta">
+    <span>{{ v.employer_name }}</span>
+    <span class="sep">&middot;</span>
+    <span>{{ v.municipal }}{% if v.county %}, {{ v.county }}{% endif %}</span>
+    {% if v.language %}<span class="sep">&middot;</span><span class="lang-tag">{{ v.language }}</span>{% endif %}
+    <span class="sep">&middot;</span>
+    <span class="source-tag">{{ v.source }}</span>
+  </div>
+
+  {% if breakdown %}
+  <details class="score-breakdown">
+    <summary>Чому такий відсоток?</summary>
+    <table>
+      {% for item in breakdown %}
+      <tr>
+        <td>{{ item.label }}</td>
+        <td class="num {{ 'points-pos' if item.points > 0 else ('points-neg' if item.points < 0 else '') }}">
+          {{ "%+d" | format(item.points) if item.points != 0 else "0" }}
+        </td>
+        <td class="detail-cell">{{ item.detail_text }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% endif %}
+
+  <div class="vacancy-facts">
+    {% if v.application_due %}<div><strong>Дедлайн:</strong> <span class="num">{{ v.application_due | format_due | translate_value }}</span></div>{% endif %}
+    {% if v.engagement_type %}<div><strong>Тип зайнятості:</strong> {{ v.engagement_type | translate_value }}</div>{% endif %}
+    {% if v.extent %}<div><strong>Обсяг:</strong> {{ v.extent | translate_value }}{% if v.extent_percent %} (<span class="num">{{ v.extent_percent }}%</span>){% endif %}</div>{% endif %}
+    {% if v.sector %}<div><strong>Сектор:</strong> {{ v.sector | translate_value }}</div>{% endif %}
+    {% if v.salary_text %}<div><strong>Зарплата:</strong> <span class="salary-tag num">{{ v.salary_text }}</span></div>{% endif %}
+    {% if reach and not reach.error %}
+    <div><strong>Громадський транспорт з дому:</strong> <span class="num">{{ reach.duration_min | format_duration_min }}</span> ({{ reach.modes | join(", ") }})</div>
+    {% elif reach and reach.error == "no_route" %}
+    <div><strong>Громадський транспорт з дому:</strong> <span class="reach-none">маршрут не знайдено</span></div>
+    {% endif %}
+  </div>
+
+  {% include "_status_control.html" %}
+  {% include "_notes_control.html" %}
+
+  {% if lender %}
+  <div class="borrowed-notice">
+    Опис на finn.no недоступний (заборонено правилами сайту) — показано опис зі схожого оголошення тієї ж компанії
+    (<a href="/vacancy/{{ lender.uuid }}">{{ lender.title }}</a>, {{ lender.source }}). Може відрізнятись дослівно від оригіналу на finn.no.
+  </div>
+  {% endif %}
+
+  <div class="description">
+    {{ description_html | safe }}
+  </div>
+
+  <div class="actions">
+    {% if v.application_url %}
+    <a class="apply-btn" href="{{ v.application_url }}" target="_blank" rel="noopener">Подати заявку на сайті роботодавця &rarr;</a>
+    {% elif v.link %}
+    <a class="apply-btn" href="{{ v.link }}" target="_blank" rel="noopener">Відкрити на arbeidsplassen.no &rarr;</a>
+    {% endif %}
+    <a class="apply-btn resume-btn" href="/vacancy/{{ v.uuid }}/resume-prompt">Згенерувати søknad &rarr;</a>
+    {% for doc in generated_docs %}
+    <a class="apply-btn doc-btn" href="/vacancy/{{ v.uuid }}/document/{{ doc }}">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 1.5h6l3 3v10h-9z"/>
+        <path d="M10 1.5v3h3"/>
+      </svg>
+      {{ doc }}
+    </a>
+    {% endfor %}
+  </div>
+</article>
+
+{% endblock %}

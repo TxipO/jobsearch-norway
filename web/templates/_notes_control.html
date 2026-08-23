@@ -1,0 +1,11 @@
+<div id="notes-{{ v.uuid }}" class="notes-control">
+  <form
+    hx-post="/vacancy/{{ v.uuid }}/notes"
+    hx-target="#notes-{{ v.uuid }}"
+    hx-swap="outerHTML settle:180ms"
+  >
+    <textarea name="notes" class="notes-textarea" aria-label="Нотатки по цій вакансії" placeholder="Нотатки по цій вакансії — напр. коли/як подавався, хто контакт, статус відповіді…">{{ v.notes or "" }}</textarea>
+    <button type="submit" class="notes-save-btn">Зберегти нотатку</button>
+    {% if v.notes %}<span class="notes-saved-tag">Збережено</span>{% endif %}
+  </form>
+</div>

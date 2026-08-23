@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Резюме-промпт — {{ v.title }}{% endblock %}
+{% block content %}
+
+<a href="/vacancy/{{ v.uuid }}" class="back-link">&larr; До вакансії</a>
+
+<article class="vacancy-detail">
+  <h1>Промпт для генерації søknad</h1>
+  <p class="prompt-hint">
+    Скопіюй весь текст нижче і встав у <strong>новий чат Claude Code</strong> (не claude.ai —
+    треба доступ до файлів). CV генерується один раз (<code>master-cv{{ '-no' if lang == 'no' else '' }}.docx</code>)
+    і просто копіюється — Claude пише лише текст супровідного листа під цю конкретну вакансію.
+    Готові <code>cv.pdf</code> і <code>soknad.pdf</code> з'являться в
+    <code>profile/generated/{{ v.uuid }}/</code>.
+  </p>
+
+  <div class="lang-toggle">
+    <a href="/vacancy/{{ v.uuid }}/resume-prompt?lang=en" class="{{ 'active' if lang != 'no' else '' }}">EN</a>
+    <a href="/vacancy/{{ v.uuid }}/resume-prompt?lang=no" class="{{ 'active' if lang == 'no' else '' }}">NO</a>
+  </div>
+
+  <button type="button" class="sync-btn" onclick="copyPrompt()">Скопіювати промпт</button>
+  <span id="copy-status" class="sync-status"></span>
+
+  <textarea id="prompt-box" aria-label="Текст промпту для копіювання" readonly rows="30">{{ prompt }}</textarea>
+</article>
+
+<script>
+function copyPrompt() {
+  const box = document.getElementById('prompt-box');
+  box.select();
+  navigator.clipboard.writeText(box.value).then(() => {
+    document.getElementById('copy-status').textContent = 'Скопійовано!';
+  });
+}
+</script>
+
+{% endblock %}
