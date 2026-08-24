@@ -170,15 +170,46 @@ def test_active_only_exempts_reacted_statuses_beyond_new_and_interesting(tmp_pat
     untouched-backlog states must stay visible everywhere — default
     browsing, search, every filter combination — even after the source
     closes the listing. 'new' and 'interesting' are still backlog, so they
-    stay subject to the ACTIVE-only rule; every other status is exempt."""
+    stay subject to the ACTIVE-only rule; every other status is exempt.
+    'rejected'/'ignored' are still exempt from the ACTIVE-only rule itself —
+    they just don't show in the default *unfiltered* list any more (see
+    test_rejected_and_ignored_hidden_by_default_below), a separate rule."""
     conn = _make_conn(tmp_path)
     for status in ("applied", "interview", "offer", "rejected", "ignored", "archived"):
         _insert_vacancy(conn, f"inactive-{status}", status="INACTIVE")
         db.set_user_status(conn, f"inactive-{status}", status)
 
     visible = {r["uuid"] for r in db.list_vacancies(conn, active_only=True)}
-    for status in ("applied", "interview", "offer", "rejected", "ignored", "archived"):
+    for status in ("applied", "interview", "offer", "archived"):
         assert f"inactive-{status}" in visible
+    # Confirmed absent from the *default* view by the status-hiding rule
+    # below — but still exempt from ACTIVE-only once explicitly filtered.
+    for status in ("rejected", "ignored"):
+        assert f"inactive-{status}" not in visible
+        filtered = {r["uuid"] for r in db.list_vacancies(conn, active_only=True, user_status=status)}
+        assert f"inactive-{status}" in filtered
+
+
+def test_rejected_and_ignored_hidden_by_default_but_shown_when_filtered(tmp_path):
+    """User-requested 2026-08-23: "Відмова"/"Ігнор" clutter the default main
+    list once there are enough of them — hide by default, but keep them one
+    filter-panel click away rather than making them disappear outright."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "v-new")
+    db.set_user_status(conn, "v-new", "new")
+    _insert_vacancy(conn, "v-rejected")
+    db.set_user_status(conn, "v-rejected", "rejected")
+    _insert_vacancy(conn, "v-ignored")
+    db.set_user_status(conn, "v-ignored", "ignored")
+
+    default_view = {r["uuid"] for r in db.list_vacancies(conn)}
+    assert default_view == {"v-new"}
+
+    assert db.count_vacancies(conn) == 1
+    assert db.count_vacancies(conn, user_status=["rejected", "ignored"]) == 2
+
+    rejected_filtered = {r["uuid"] for r in db.list_vacancies(conn, user_status="rejected")}
+    assert rejected_filtered == {"v-rejected"}
 
 
 def test_active_only_still_hides_interesting_and_new_when_inactive(tmp_path):

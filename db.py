@@ -528,6 +528,16 @@ def _vacancy_filters(
         if statuses:
             clauses.append(f"user_status IN ({', '.join('?' for _ in statuses)})")
             params.extend(statuses)
+    else:
+        # No explicit status picked (the default/unfiltered main-list view)
+        # — "rejected"/"ignored" are closed-out states the user is done
+        # with, user-requested 2026-08-23: don't clutter the default list
+        # with them, but they must still be reachable by explicitly picking
+        # them in the filter panel (the branch above), not disappear
+        # outright. Only reachable when user_status is the empty/falsy
+        # default — kanban always passes an explicit single status, so this
+        # never affects its columns.
+        clauses.append("user_status NOT IN ('rejected', 'ignored')")
     if language:
         clauses.append("language = ?")
         params.append(language)
