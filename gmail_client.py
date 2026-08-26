@@ -48,10 +48,18 @@ def _load_credentials() -> tuple[str, str]:
 def fetch_plain_texts(query: str) -> list[str]:
     """Runs a Gmail-syntax search (the IMAP X-GM-RAW extension — accepts the
     exact same query language as the Gmail search box, e.g. "from:finn.no")
-    against the inbox and returns the plain-text body of every match, most
-    recent last. Read-only: the mailbox's own read/unread state is never
-    touched (Gmail's IMAP server marks messages read on FETCH by default;
-    fetching BODY.PEEK[] instead of RFC822 avoids that side effect)."""
+    against the whole mailbox and returns the plain-text body of every
+    match, most recent last. Selects "[Gmail]/All Mail", not INBOX: a
+    message that's been archived or moved under a label (e.g. the user's
+    own "WorkSpam" label on finn.no/LinkedIn digests) leaves INBOX entirely
+    — IMAP SEARCH only searches within the currently selected mailbox, so
+    selecting INBOX silently missed every archived digest even though the
+    equivalent OAuth-based Gmail API search (which searches all mail by
+    default) found them (live bug, 2026-08-26: 0 results from a mailbox
+    that actually had 13/49 matching messages). Read-only: the mailbox's
+    own read/unread state is never touched (Gmail's IMAP server marks
+    messages read on FETCH by default; fetching BODY.PEEK[] instead of
+    RFC822 avoids that side effect)."""
     address, password = _load_credentials()
     texts = []
     with imaplib.IMAP4_SSL(IMAP_HOST) as imap:
@@ -59,7 +67,7 @@ def fetch_plain_texts(query: str) -> list[str]:
             imap.login(address, password)
         except imaplib.IMAP4.error as e:
             raise GmailAuthError(f"IMAP login failed: {e}") from e
-        imap.select("INBOX", readonly=True)
+        imap.select('"[Gmail]/All Mail"', readonly=True)
         status, data = imap.uid("search", "X-GM-RAW", f'"{query}"')
         if status != "OK" or not data or not data[0]:
             return texts
