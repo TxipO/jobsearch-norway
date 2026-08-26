@@ -163,6 +163,27 @@ textarea:focus-visible {
 .topnav a:hover { color: var(--c-text); }
 .topnav a.active { color: var(--c-text); border-bottom-color: var(--c-accent); }
 
+.profile-toggle {
+  display: flex;
+  border: 1px solid var(--c-border-mid);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.profile-toggle button {
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--c-text-muted);
+  background: var(--c-raised);
+  border: none;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  transition: color 130ms ease-out, background 130ms ease-out;
+}
+.profile-toggle button + button { border-left: 1px solid var(--c-border-mid); }
+.profile-toggle button:hover { color: var(--c-text); }
+.profile-toggle button.active { color: var(--c-accent-text); background: var(--c-elevated); }
+
 main {
   max-width: 1100px;
   margin: 0 auto;

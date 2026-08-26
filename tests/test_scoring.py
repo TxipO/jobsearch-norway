@@ -322,6 +322,31 @@ def test_occupation_category_missing_or_malformed_is_neutral():
     assert bd["occupation_category_bonus"]["points"] == 0
 
 
+def test_it_profile_zeroes_warehouse_only_bonuses():
+    """2026-08-26 dual-profile toggle: track_general_entry_level and the
+    positive half of occupation_category_bonus only make sense for the
+    "warehouse" profile — "it" mode must not grant them, but the retail/
+    hospitality penalty still applies regardless of profile."""
+    import json
+    cats = json.dumps([{"level1": "Industri og produksjon", "level2": "Matproduksjon"}])
+    _, bd_warehouse = score_vacancy(
+        "Lagermedarbeider", "Vi søker en lagermedarbeider.", None, None, "no", cats, profile="warehouse",
+    )
+    _, bd_it = score_vacancy(
+        "Lagermedarbeider", "Vi søker en lagermedarbeider.", None, None, "no", cats, profile="it",
+    )
+    assert bd_warehouse["track_general_entry_level"]["points"] > 0
+    assert bd_it["track_general_entry_level"]["points"] == 0
+    assert bd_warehouse["occupation_category_bonus"]["points"] > 0
+    assert bd_it["occupation_category_bonus"]["points"] == 0
+
+    retail_cats = json.dumps([{"level1": "Salg og service", "level2": "Butikk"}])
+    _, bd_it_retail = score_vacancy(
+        "Butikkmedarbeider", "Vi søker en engasjert medarbeider.", None, None, "no", retail_cats, profile="it",
+    )
+    assert bd_it_retail["occupation_category_bonus"]["points"] < 0
+
+
 def test_phone_support_channel_is_penalized():
     """User wants chat/written support, not phone-based (2026-08-18)."""
     _, bd = _score("Kundekonsulent", "Du jobber i vårt kundesenter med utgående samtaler.")

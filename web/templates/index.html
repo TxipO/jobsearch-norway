@@ -191,7 +191,8 @@
 <div class="vacancy-list">
   {% for v in vacancies %}
   <div class="vacancy-row {{ 'vacancy-excluded' if v.excluded }}">
-    <div class="score-badge {{ 'score-high' if v.score >= 55 else ('score-mid' if v.score >= 25 else 'score-low') }}">
+    {% set vs = v.score if v.score is not none else -1 %}
+    <div class="score-badge {{ 'score-high' if vs >= 55 else ('score-mid' if vs >= 25 else 'score-low') }}">
       {{ v.score if v.score is not none else '—' }}%
     </div>
     <div class="vacancy-main">

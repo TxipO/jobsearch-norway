@@ -499,6 +499,39 @@ def test_min_score_filter(tmp_path):
     assert db.count_vacancies(conn) == 2
 
 
+def test_score_profile_selects_independent_column(tmp_path):
+    """2026-08-26: dual scoring profiles ("warehouse" default, "it" toggle) —
+    each vacancy carries two independently-scored, independently-filterable
+    columns. count_vacancies/list_vacancies must read/filter/sort by whichever
+    profile is requested, never mixing the two."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "warehouse-fit")
+    _insert_vacancy(conn, "it-fit")
+    db.set_score(conn, "warehouse-fit", 80, {"a": {"points": 80, "matched": []}})
+    db.set_score(conn, "it-fit", 10, {"a": {"points": 10, "matched": []}})
+    db.set_score_it(conn, "warehouse-fit", 10, {"b": {"points": 10, "matched": []}})
+    db.set_score_it(conn, "it-fit", 80, {"b": {"points": 80, "matched": []}})
+
+    assert db.count_vacancies(conn, min_score=50, score_profile="warehouse") == 1
+    assert db.count_vacancies(conn, min_score=50, score_profile="it") == 1
+    visible_warehouse = db.list_vacancies(conn, min_score=50, score_profile="warehouse")
+    visible_it = db.list_vacancies(conn, min_score=50, score_profile="it")
+    assert {r["uuid"] for r in visible_warehouse} == {"warehouse-fit"}
+    assert {r["uuid"] for r in visible_it} == {"it-fit"}
+    # The aliased "score" column in the row must reflect the requested profile.
+    assert visible_warehouse[0]["score"] == 80
+    assert visible_it[0]["score"] == 80
+
+
+def test_score_profile_rejects_unknown_value(tmp_path):
+    conn = _make_conn(tmp_path)
+    try:
+        db.count_vacancies(conn, min_score=1, score_profile="bogus")
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
 def test_min_salary_filter(tmp_path):
     conn = _make_conn(tmp_path)
     _insert_vacancy(conn, "no-salary")

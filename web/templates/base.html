@@ -25,6 +25,11 @@
       <a href="/" {{ 'aria-current="page" class="active"' | safe if request.url.path == "/" }}>Список</a>
       <a href="/kanban" {{ 'aria-current="page" class="active"' | safe if request.url.path == "/kanban" }}>Kanban</a>
     </nav>
+    <form method="post" action="/score-profile" class="profile-toggle">
+      <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+      <button type="submit" name="profile" value="warehouse" class="{{ 'active' if score_profile != 'it' }}">Склад</button>
+      <button type="submit" name="profile" value="it" class="{{ 'active' if score_profile == 'it' }}">IT</button>
+    </form>
   </header>
   <main>
     {% block content %}{% endblock %}
