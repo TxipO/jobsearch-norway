@@ -26,10 +26,9 @@ borrow-from-NAV/Jobbnorge fallback both sources rely on.
 
 import re
 import sqlite3
-from base64 import urlsafe_b64decode
 
 from db import upsert_vacancy_row
-from gmail_client import get_service, search_messages
+from gmail_client import fetch_plain_texts
 from jobbnorge_client import _build_municipality_county_map
 
 BLOCK_SPLIT_RE = re.compile(r"-{20,}")
@@ -39,26 +38,9 @@ BLOCK_SPLIT_RE = re.compile(r"-{20,}")
 VIEW_JOB_RE = re.compile(r"https://(?:www|[a-z]{2})\.linkedin\.com/comm/jobs/view/(\d+)")
 
 
-def _find_text_plain(part) -> str | None:
-    if part.get("mimeType") == "text/plain":
-        return part["body"].get("data")
-    for sub in part.get("parts", []) or []:
-        found = _find_text_plain(sub)
-        if found:
-            return found
-    return None
-
-
 def fetch_digest_texts() -> list[str]:
     """One text body per LinkedIn job-alert email currently in the mailbox."""
-    service = get_service()
-    texts = []
-    for msg in search_messages(service, "from:jobalerts-noreply@linkedin.com"):
-        full = service.users().messages().get(userId="me", id=msg["id"], format="full").execute()
-        data = _find_text_plain(full["payload"])
-        if data:
-            texts.append(urlsafe_b64decode(data).decode("utf-8", errors="replace"))
-    return texts
+    return fetch_plain_texts("from:jobalerts-noreply@linkedin.com")
 
 
 def _strip_employer_suffix(title: str, employer: str) -> str:

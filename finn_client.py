@@ -23,38 +23,20 @@ so building it twice per sync (once here, once there) is the only real cost
 just to share one dict across two independent source syncs.
 """
 
-import base64
 import re
 import sqlite3
 
 from db import upsert_vacancy_row
-from gmail_client import get_service, search_messages
+from gmail_client import fetch_plain_texts
 from jobbnorge_client import _build_municipality_county_map
 
 DASH_SPLIT_RE = re.compile(r"-{20,}")
 URL_RE = re.compile(r"(https://www\.finn\.no/\d+)")
 
 
-def _find_text_plain(part) -> str | None:
-    if part.get("mimeType") == "text/plain":
-        return part["body"].get("data")
-    for sub in part.get("parts", []) or []:
-        found = _find_text_plain(sub)
-        if found:
-            return found
-    return None
-
-
 def fetch_digest_texts() -> list[str]:
     """One text body per finn.no digest email currently in the mailbox."""
-    service = get_service()
-    texts = []
-    for msg in search_messages(service, "from:finn.no"):
-        full = service.users().messages().get(userId="me", id=msg["id"], format="full").execute()
-        data = _find_text_plain(full["payload"])
-        if data:
-            texts.append(base64.urlsafe_b64decode(data).decode("utf-8", errors="replace"))
-    return texts
+    return fetch_plain_texts("from:finn.no")
 
 
 def parse_digest(text: str) -> list[dict]:

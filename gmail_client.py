@@ -1,87 +1,75 @@
-import base64
+"""Gmail access via IMAP + an app password — not OAuth.
+
+Google forces an OAuth refresh token to expire every 7 days for an
+unverified app ("Testing" publishing status) requesting a restricted scope
+like gmail.readonly, and full verification requires a paid third-party
+security audit — not viable for a personal project. Confirmed live
+2026-08-26: the token expired exactly 7 days after being reissued, for the
+third time. An app password (myaccount.google.com/apppasswords, requires
+2-Step Verification) doesn't expire on its own — only on password change or
+manual revocation — and Gmail's IMAP server accepts the same search syntax
+as the Gmail search box via the X-GM-RAW extension, so every existing
+"from:X" query keeps working unchanged. See jobsearch-norway-sources
+memory for the full OAuth-vs-IMAP investigation.
+"""
+
+import email
+import imaplib
+import json
+from email.policy import default as email_policy
 from pathlib import Path
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
-CREDENTIALS_PATH = Path(__file__).parent / "credentials" / "client_secret.json"
-TOKEN_PATH = Path(__file__).parent / "data" / "gmail_token.json"
+CREDENTIALS_PATH = Path(__file__).parent / "credentials" / "gmail_app_password.json"
+IMAP_HOST = "imap.gmail.com"
 
 
 class GmailAuthError(Exception):
-    """Raised when the stored token can't be silently refreshed. The fix is
-    always the same: run `py -c "from gmail_client import setup; setup()"`
-    once from an interactive terminal — never from the web server."""
+    """Raised when credentials/gmail_app_password.json is missing, or the
+    IMAP login itself fails (wrong password, 2-Step Verification not
+    enabled, app password revoked). Fix: generate a fresh app password at
+    myaccount.google.com/apppasswords and write it to that file (see
+    _load_credentials()'s error message for the exact JSON shape) —
+    credentials/ is entirely gitignored, same as the old client_secret.json,
+    so there's no tracked .example to copy from."""
 
 
-def get_service():
-    """Web/sync-route-safe: refreshes an expired token silently, but never
-    launches the interactive OAuth flow. Live bug 2026-07-17 ("Sync now"
-    button hanging forever, inconsistently): a genuinely invalid/missing
-    token used to fall through to flow.run_local_server(port=0), which
-    opens a local HTTP server and BLOCKS waiting for someone to complete a
-    browser consent flow. Called from inside a FastAPI request handler,
-    that's not a slow request — it's a request that never returns, tying up
-    a thread indefinitely with no one watching for the browser prompt."""
-    if not TOKEN_PATH.exists():
-        raise GmailAuthError("No Gmail token on disk yet — run gmail_client.setup() once, interactively.")
-
-    creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            TOKEN_PATH.write_text(creds.to_json())
-        else:
-            raise GmailAuthError(
-                "Gmail token is invalid and has no refresh_token — run gmail_client.setup() again."
-            )
-
-    return build("gmail", "v1", credentials=creds)
+def _load_credentials() -> tuple[str, str]:
+    if not CREDENTIALS_PATH.exists():
+        raise GmailAuthError(
+            f'No Gmail app-password file at {CREDENTIALS_PATH}. Create it with:\n'
+            f'{{"email": "you@gmail.com", "app_password": "xxxx xxxx xxxx xxxx"}}\n'
+            f"(app_password from myaccount.google.com/apppasswords, requires "
+            f"2-Step Verification enabled on that account)."
+        )
+    data = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
+    return data["email"], data["app_password"]
 
 
-def setup():
-    """Interactive, first-time (or re-)authorization — run this yourself
-    from a terminal, never call it from the web app. Opens a browser."""
-    flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-    creds = flow.run_local_server(port=0)
-    TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_PATH.write_text(creds.to_json())
-    return creds
-
-
-def search_messages(service, query: str, max_results: int = 50) -> list[dict]:
-    messages = []
-    request = service.users().messages().list(userId="me", q=query, maxResults=max_results)
-    while request is not None:
-        response = request.execute()
-        messages.extend(response.get("messages", []))
-        if len(messages) >= max_results:
-            break
-        request = service.users().messages().list_next(request, response)
-    return messages[:max_results]
-
-
-def get_message(service, message_id: str) -> dict:
-    return service.users().messages().get(userId="me", id=message_id, format="full").execute()
-
-
-def _walk_parts(payload: dict):
-    if payload.get("parts"):
-        for part in payload["parts"]:
-            yield from _walk_parts(part)
-    else:
-        yield payload
-
-
-def extract_bodies(message: dict) -> dict:
-    """Returns {'text/plain': str, 'text/html': str} for whatever parts are present."""
-    bodies = {}
-    for part in _walk_parts(message["payload"]):
-        mime_type = part.get("mimeType", "")
-        data = part.get("body", {}).get("data")
-        if data and mime_type in ("text/plain", "text/html"):
-            bodies[mime_type] = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-    return bodies
+def fetch_plain_texts(query: str) -> list[str]:
+    """Runs a Gmail-syntax search (the IMAP X-GM-RAW extension — accepts the
+    exact same query language as the Gmail search box, e.g. "from:finn.no")
+    against the inbox and returns the plain-text body of every match, most
+    recent last. Read-only: the mailbox's own read/unread state is never
+    touched (Gmail's IMAP server marks messages read on FETCH by default;
+    fetching BODY.PEEK[] instead of RFC822 avoids that side effect)."""
+    address, password = _load_credentials()
+    texts = []
+    with imaplib.IMAP4_SSL(IMAP_HOST) as imap:
+        try:
+            imap.login(address, password)
+        except imaplib.IMAP4.error as e:
+            raise GmailAuthError(f"IMAP login failed: {e}") from e
+        imap.select("INBOX", readonly=True)
+        status, data = imap.uid("search", "X-GM-RAW", f'"{query}"')
+        if status != "OK" or not data or not data[0]:
+            return texts
+        for uid in data[0].split():
+            status, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[])")
+            if status != "OK" or not msg_data or not msg_data[0]:
+                continue
+            raw = msg_data[0][1]
+            msg = email.message_from_bytes(raw, policy=email_policy)
+            body = msg.get_body(preferencelist=("plain",))
+            if body is not None:
+                texts.append(body.get_content())
+    return texts
