@@ -329,3 +329,24 @@ def test_truckforerbevis_training_offered_overrides_hard_requirement():
         "Truckførerbevis er et krav, men opplæring vil bli gitt til rett kandidat.",
     )
     assert not excluded
+
+
+def test_truckforerbevis_distant_generic_training_does_not_override():
+    """Live bug found 2026-08-26 (user spot-checked and found no on-topic
+    training mention on 2 of 3 "training offered" results): the override
+    used to search the whole body, so an unrelated "Full opplæring vil bli
+    gitt" onboarding sentence — far from the actual truckførerbevis
+    requirement — silently saved the vacancy from a real block. Real case:
+    "Truckfører med T4 erfaring" lists "Truckførerbevis T1–T4" as a
+    qualification, then a generic training sentence ~276 chars later talks
+    about onboarding in general, not the certificate."""
+    excluded, reason = check_exclusion(
+        "Truckfører med T4 erfaring",
+        "Søker motiverte lagermedarbeidere med truckførerbevis til oppdrag. "
+        "Kvalifikasjoner: Truckførerbevis T1-T4. Du kan kommunisere på norsk. "
+        "Du trives med fysisk arbeid og høyt tempo. Du er fleksibel og pålitelig. "
+        "Erfaring fra lager er en fordel, men motivasjon og arbeidsvilje er viktigst. "
+        "Opplæring vil bli gitt.",
+    )
+    assert excluded
+    assert "truckførerbevis" in reason.lower()
