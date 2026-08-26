@@ -236,6 +236,54 @@ def _has_definite_security_clearance_requirement(text: str) -> bool:
 EU_PASSPORT_REQUIREMENT_RE = re.compile(r"eu[\s-]?passport", re.I)
 
 
+# Truckførerbevis (forklift certificate) — added 2026-08-26 at the user's
+# explicit request, and deliberately temporary/conditional, unlike every
+# other block above. Unlike a driving licence, truckførerbevis IS
+# genuinely achievable — a T1-T5 course needs no prior licence or fagbrev,
+# just 5-7.5k kr and a day or two (see jobsearch-norway-profile memory).
+# But the user isn't pursuing it independently right now, so a posting
+# that firmly REQUIRES one is a real disqualifier today — UNLESS the ad
+# itself offers to train the hire on the job, which the user is fine with
+# ("якщо на місці вже запропонують, то я не проти"). This is the first
+# *conditional* body-level block in this file (every other check here is
+# unconditional) — narrow on purpose: measured against the live corpus
+# (2026-08-26, ~112 truckfør*-vacancies), the overwhelming majority use
+# soft/optional phrasing ("er en fordel, men ikke et krav", "gjerne",
+# "ønskelig", "bør ha") that must NOT be blocked, and only a handful use an
+# unambiguous hard-requirement verb ("må ha truckførerbevis", "dette er et
+# krav", "kreves"). Erring toward under-blocking the ambiguous middle
+# ("at du har X" bullet lists with no visible verb) is deliberate — same
+# "don't hide what we can't confidently judge" principle as the low-extent
+# check below. Revisit/remove entirely if the user gets the certificate
+# independently — see jobsearch-norway-profile memory for exactly how this
+# behaved before this change (GENERAL_ENTRY_KEYWORDS-only, no block).
+TRUCKFORERBEVIS_MENTION_RE = re.compile(r"truckfø")
+TRUCKFORERBEVIS_HARD_REQUIREMENT_RE = re.compile(
+    r"må ha|må kunne|\ber et krav\b|dette er et krav|kreves|krever"
+)
+TRUCKFORERBEVIS_TRAINING_OFFERED_RE = re.compile(
+    r"opplæring (vil bli gitt|kan gis|gis)|vi lærer deg opp|får opplæring|læres opp"
+)
+
+
+def _has_unmet_truckforerbevis_requirement(title_l: str, body_l: str) -> bool:
+    """True when truckførerbevis reads as a firm requirement with no
+    on-the-job training offered. Checks the title as a role-defining term
+    ("Truckfører søkes") unconditionally — that role structurally needs the
+    certificate to do the job at all — and the body only where a hard-
+    requirement verb sits within ~50 chars of a truckfør mention, so a
+    soft/optional mention elsewhere in the ad doesn't trigger it."""
+    if TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(body_l):
+        return False
+    if TRUCKFORERBEVIS_MENTION_RE.search(title_l):
+        return True
+    for m in TRUCKFORERBEVIS_MENTION_RE.finditer(body_l):
+        window = body_l[max(0, m.start() - 50):m.end() + 50]
+        if TRUCKFORERBEVIS_HARD_REQUIREMENT_RE.search(window):
+            return True
+    return False
+
+
 # Below this and outside Vestland, relocating doesn't cover rent — see
 # PLAN.md point 4 ("щоб при переїзді можна було реально зняти хату/кімнату/
 # купити їжи"). Only applied when extent_percent is actually known (parsed
@@ -277,5 +325,8 @@ def check_exclusion(
 
     if EU_PASSPORT_REQUIREMENT_RE.search(body_l):
         return True, "Вакансія фізично за кордоном (вимагає EU passport), не в Норвегії"
+
+    if _has_unmet_truckforerbevis_requirement(title_l, body_l):
+        return True, "Вимагає truckførerbevis без навчання на місці — поки не отримуємо"
 
     return False, None

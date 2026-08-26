@@ -287,3 +287,45 @@ def test_relocation_to_norway_not_blocked_by_eu_passport_check():
         "housing for candidates moving to Norway from abroad.",
     )
     assert not excluded
+
+
+def test_truckforerbevis_hard_requirement_blocked():
+    """Live case, real corpus 2026-08-26: "Vi trenger lagermedarbeidere med
+    truckførerbevis" — body says "truckførerbevis t1-t4 er et krav", an
+    unambiguous hard requirement with no training offered."""
+    excluded, reason = check_exclusion(
+        "Vi trenger lagermedarbeidere med truckførerbevis",
+        "Erfaring fra lager eller truckkjøring. Truckførerbevis t1-t4 er et krav. Du må kunne kommunisere på norsk.",
+    )
+    assert excluded
+    assert "truckførerbevis" in reason.lower()
+
+
+def test_truckforerbevis_soft_mention_not_blocked():
+    """The dominant real phrasing — "er en fordel, men ikke et krav" — must
+    NOT block. Measured live: ~92/112 truckfør*-vacancies use this or
+    similar soft/optional phrasing."""
+    excluded, _ = check_exclusion(
+        "Produksjonsmedarbeider",
+        "Truckførerbevis er en fordel, men ikke et krav. God fysisk form er ønskelig.",
+    )
+    assert not excluded
+
+
+def test_truckforerbevis_role_title_blocked():
+    """A "Truckfører" role title structurally needs the certificate to do
+    the job at all, regardless of body phrasing."""
+    excluded, reason = check_exclusion("Truckfører Vestby", "Bli med i et godt arbeidsmiljø.")
+    assert excluded
+    assert "truckførerbevis" in reason.lower()
+
+
+def test_truckforerbevis_training_offered_overrides_hard_requirement():
+    """User-requested override 2026-08-26: "якщо вони вказують, що будуть
+    навчати на місці прям - тоді проходить" — training offered must save
+    even an otherwise-hard requirement from being blocked."""
+    excluded, _ = check_exclusion(
+        "Lagermedarbeider",
+        "Truckførerbevis er et krav, men opplæring vil bli gitt til rett kandidat.",
+    )
+    assert not excluded
