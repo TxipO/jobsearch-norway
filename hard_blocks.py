@@ -268,19 +268,51 @@ TRUCKFORERBEVIS_TRAINING_OFFERED_RE = re.compile(
 
 def _has_unmet_truckforerbevis_requirement(title_l: str, body_l: str) -> bool:
     """True when truckførerbevis reads as a firm requirement with no
-    on-the-job training offered. Checks the title as a role-defining term
-    ("Truckfører søkes") unconditionally — that role structurally needs the
-    certificate to do the job at all — and the body only where a hard-
-    requirement verb sits within ~50 chars of a truckfør mention, so a
-    soft/optional mention elsewhere in the ad doesn't trigger it."""
-    if TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(body_l):
-        return False
-    if TRUCKFORERBEVIS_MENTION_RE.search(title_l):
-        return True
-    for m in TRUCKFORERBEVIS_MENTION_RE.finditer(body_l):
+    on-the-job training offered *for that certificate specifically*.
+
+    Live bug found 2026-08-26 (user spot-checked the "training offered"
+    list and couldn't find any training mention on 2 of the first 3): the
+    training-offered check originally searched the WHOLE body, so a
+    generic "Full opplæring vil bli gitt" onboarding sentence — unrelated
+    to truckførerbevis, often nowhere near it — silently overrode a real
+    requirement. Live case: "Truckfører med T4 erfaring" lists
+    "Truckførerbevis T1–T4" under Kvalifikasjoner (candidates must already
+    hold it), then a generic training sentence 276 characters later talks
+    about general onboarding, not the certificate — the old code let it
+    through anyway. Fixed by requiring the training phrase to sit within
+    ~50 chars of a truckfør mention, same window as the hard-requirement
+    check — measured against the one confirmed on-topic live case
+    ("truckførerbevis klasse t1 er ønskelig. opplæring kan gis", 39 chars
+    apart) vs. the false-override case above (276 chars), 50 cleanly
+    separates them.
+
+    Checks the title as a role-defining term ("Truckfører søkes")
+    unconditionally — that role structurally needs the certificate to do
+    the job at all — but a body mention with training offered nearby still
+    overrides even a title-driven block."""
+    body_mentions = list(TRUCKFORERBEVIS_MENTION_RE.finditer(body_l))
+
+    def _training_offered_near(pos: int) -> bool:
+        # Asymmetric: training phrasing is a trailing clause in every real
+        # example seen ("...er ønskelig. opplæring kan gis"), so the window
+        # extends further forward than back — 90 chars comfortably fits a
+        # full "opplæring vil bli gitt"-length clause after "truckfø" (a
+        # 50/50 symmetric window clipped "gitt" off a real phrase in
+        # testing) while staying nowhere near the 276-char distance of the
+        # unrelated onboarding sentence this fix excludes.
+        window = body_l[max(0, pos - 50):pos + 90]
+        return bool(TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(window))
+
+    for m in body_mentions:
         window = body_l[max(0, m.start() - 50):m.end() + 50]
-        if TRUCKFORERBEVIS_HARD_REQUIREMENT_RE.search(window):
+        if TRUCKFORERBEVIS_HARD_REQUIREMENT_RE.search(window) and not _training_offered_near(m.start()):
             return True
+
+    if TRUCKFORERBEVIS_MENTION_RE.search(title_l):
+        if any(_training_offered_near(m.start()) for m in body_mentions):
+            return False
+        return True
+
     return False
 
 
