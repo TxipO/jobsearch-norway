@@ -28,6 +28,15 @@ SYNC_STATE_KEY = "web_last_sync_summary"
 # separate history table (first_seen_at > this value = appeared this sync).
 PREV_SYNC_AT_KEY = "web_prev_sync_at"
 NEW_HIGH_SCORE_THRESHOLD = 55
+# Which of the two fully-precomputed scoring profiles (db.SCORE_PROFILE_COLUMNS)
+# drives the visible list/sort/filter and detail-page score — user toggle,
+# 2026-08-26, persisted so it survives across requests/tabs like other feed_state.
+SCORE_PROFILE_KEY = "web_score_profile"
+
+
+def get_score_profile(conn) -> str:
+    value = db.get_state(conn, SCORE_PROFILE_KEY)
+    return value if value in db.SCORE_PROFILE_COLUMNS else "warehouse"
 
 app = FastAPI(title="Jobsearch Norway")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -234,6 +243,7 @@ def index(
     show_flagged: str = "", min_extent_percent: str = "", occupation_category: str = "",
 ):
     conn = get_conn()
+    score_profile = get_score_profile(conn)
     show_excluded_flag = show_excluded == "1"
     show_flagged_flag = show_flagged == "1"
     page = max(1, page)
@@ -265,6 +275,7 @@ def index(
         show_flagged=show_flagged_flag,
         min_extent_percent=min_extent_percent_val,
         occupation_category=occupation_category or None,
+        score_profile=score_profile,
     )
     total = db.count_vacancies(conn, **filter_kwargs)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -292,6 +303,7 @@ def index(
             "page": page,
             "total_pages": total_pages,
             "total": total,
+            "score_profile": score_profile,
         },
     )
 
@@ -299,6 +311,7 @@ def index(
 @app.get("/kanban", response_class=HTMLResponse)
 def kanban(request: Request):
     conn = get_conn()
+    score_profile = get_score_profile(conn)
     # "new" is the entire unreacted backlog (~1000s of rows) — that's the
     # main list's job. Kanban is for tracking applications you've actually
     # acted on, so it starts at "interesting". "ignored"/"archived" are
@@ -312,10 +325,10 @@ def kanban(request: Request):
     # (code-review 2026-07-19; index.html shows a "hidden, show anyway" bar
     # for the same case, kanban has none, so hiding here would be silent).
     columns = {
-        s: db.list_vacancies(conn, active_only=False, user_status=s, limit=500, show_flagged=True)
+        s: db.list_vacancies(conn, active_only=False, user_status=s, limit=500, show_flagged=True, score_profile=score_profile)
         for s in db.USER_STATUSES if s not in ("new", "ignored", "archived")
     }
-    return templates.TemplateResponse(request, "kanban.html", {"columns": columns})
+    return templates.TemplateResponse(request, "kanban.html", {"columns": columns, "score_profile": score_profile})
 
 
 @app.post("/sync")
@@ -387,6 +400,15 @@ def trigger_sync():
     return RedirectResponse(url="/", status_code=303)
 
 
+@app.post("/score-profile")
+def set_score_profile(profile: str = Form(...), next: str = Form("/")):
+    if profile not in db.SCORE_PROFILE_COLUMNS:
+        raise HTTPException(status_code=400, detail="Unknown score profile")
+    conn = get_conn()
+    db.set_state(conn, SCORE_PROFILE_KEY, profile)
+    return RedirectResponse(url=next, status_code=303)
+
+
 @app.get("/sync-status")
 def sync_status():
     """Polled by index.html to auto-reload OTHER open tabs once a sync
@@ -402,9 +424,14 @@ def sync_status():
 @app.get("/vacancy/{uuid}", response_class=HTMLResponse)
 def vacancy_detail(request: Request, uuid: str):
     conn = get_conn()
+    score_profile = get_score_profile(conn)
     vacancy = get_vacancy_or_404(conn, uuid)
     description_html = sanitize_description(vacancy["description"])
-    breakdown = format_breakdown(vacancy["score_breakdown"])
+    if score_profile == "it":
+        display_score, breakdown_raw = vacancy["score_it"], vacancy["score_it_breakdown"]
+    else:
+        display_score, breakdown_raw = vacancy["score"], vacancy["score_breakdown"]
+    breakdown = format_breakdown(breakdown_raw)
     doc_dir = GENERATED_DIR / uuid
     generated_docs = [name for name in GENERATED_DOC_NAMES if (doc_dir / name).exists()]
     reach = reachability.get_reachability(conn, vacancy["municipal"])
@@ -415,6 +442,7 @@ def vacancy_detail(request: Request, uuid: str):
         {
             "v": vacancy, "description_html": description_html, "breakdown": breakdown,
             "generated_docs": generated_docs, "reach": reach, "lender": lender,
+            "score_profile": score_profile, "display_score": display_score,
         },
     )
 
@@ -442,7 +470,8 @@ def vacancy_resume_prompt(request: Request, uuid: str, lang: str = "en"):
         vacancy["municipal"], vacancy["county"], uuid, lang=lang,
     )
     return templates.TemplateResponse(
-        request, "resume_prompt.html", {"v": vacancy, "prompt": prompt, "lang": lang}
+        request, "resume_prompt.html",
+        {"v": vacancy, "prompt": prompt, "lang": lang, "score_profile": get_score_profile(conn)},
     )
 
 

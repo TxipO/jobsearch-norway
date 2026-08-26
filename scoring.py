@@ -316,6 +316,7 @@ def score_vacancy(
     county: str | None,
     language: str | None = None,
     occupation_categories: str | None = None,
+    profile: str = "warehouse",
 ) -> tuple[int, dict]:
     title_l = (title or "").lower()
     text = f"{title_l} {strip_html(description_html)}".lower()
@@ -328,8 +329,16 @@ def score_vacancy(
     it_score = min(it_hits * 8, 40)
     breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}
 
+    # Two profiles, 2026-08-27 user-requested toggle: "warehouse" is the
+    # 2026-08-18 retarget (production/склад/логистика, current default),
+    # "it" restores IT-support as the dominant track by zeroing this
+    # track's points — matched keywords still shown in the breakdown for
+    # transparency, just worth 0 in this profile, not hidden. Retail is
+    # NOT revived in "it" mode — that keyword removal was a separate,
+    # permanent decision (see jobsearch-norway-profile memory), independent
+    # of which profile is active.
     entry_hits, entry_kw = _count_keyword_hits(text, GENERAL_ENTRY_KEYWORDS)
-    entry_track_score = min(entry_hits * 6, 30)
+    entry_track_score = min(entry_hits * 6, 30) if profile == "warehouse" else 0
     breakdown["track_general_entry_level"] = {"points": entry_track_score, "matched": entry_kw}
 
     dev_hits, dev_kw = _count_keyword_hits(text, DEV_SECURITY_KEYWORDS)
@@ -400,10 +409,15 @@ def score_vacancy(
     language_penalty = -20 if requires_norwegian_fluency else 0
     breakdown["norwegian_fluency_penalty"] = {"points": language_penalty, "matched": requires_norwegian_fluency}
 
+    # Same "it" profile carve-out as track_general_entry_level above: the
+    # Industri og produksjon/Transport og lager BONUS is warehouse-specific
+    # and zeroed in "it" mode, but the Salg og service/Reiseliv og mat
+    # PENALTY always applies — rejecting retail/hospitality was a separate,
+    # permanent decision, not tied to which track is currently favored.
     category_l1 = _parse_occupation_category_level1(occupation_categories)
-    category_points = sum(OCCUPATION_CATEGORY_BONUS.get(c, 0) for c in category_l1) + \
-        sum(OCCUPATION_CATEGORY_PENALTY.get(c, 0) for c in category_l1)
-    breakdown["occupation_category_bonus"] = {"points": category_points, "matched": sorted(category_l1)}
+    category_bonus = sum(OCCUPATION_CATEGORY_BONUS.get(c, 0) for c in category_l1) if profile == "warehouse" else 0
+    category_penalty = sum(OCCUPATION_CATEGORY_PENALTY.get(c, 0) for c in category_l1)
+    breakdown["occupation_category_bonus"] = {"points": category_bonus + category_penalty, "matched": sorted(category_l1)}
 
     is_phone_support = any(kw in text for kw in PHONE_SUPPORT_KEYWORDS)
     phone_penalty = -10 if is_phone_support else 0
@@ -564,9 +578,22 @@ def rescore_all(conn) -> dict:
 
         score, breakdown = score_vacancy(
             row["title"], description, row["municipal"], row["county"], language,
-            row["occupation_categories"],
+            row["occupation_categories"], profile="warehouse",
         )
         db.set_score(conn, row["uuid"], score, breakdown)
+
+        # Second profile, stored separately (score_it/score_it_breakdown) —
+        # the "IT-support like before the warehouse retarget" toggle
+        # (2026-08-27). Dedup/hard-block decisions below stay keyed off the
+        # warehouse score only — which physical row is the visible "keeper"
+        # of a cross-source duplicate is a structural fact about the
+        # vacancy, not something that should flip depending on which
+        # profile you're currently viewing.
+        score_it, breakdown_it = score_vacancy(
+            row["title"], description, row["municipal"], row["county"], language,
+            row["occupation_categories"], profile="it",
+        )
+        db.set_score_it(conn, row["uuid"], score_it, breakdown_it)
 
         all_candidates.append({
             "uuid": row["uuid"], "score": score, "source": row["source"],

@@ -6,8 +6,9 @@
 
 <article class="vacancy-detail">
   <div class="detail-header">
-    <div class="score-badge {{ 'score-high' if v.score >= 55 else ('score-mid' if v.score >= 25 else 'score-low') }}">
-      {{ v.score if v.score is not none else '—' }}%
+    {% set ds = display_score if display_score is not none else -1 %}
+    <div class="score-badge {{ 'score-high' if ds >= 55 else ('score-mid' if ds >= 25 else 'score-low') }}">
+      {{ display_score if display_score is not none else '—' }}%
     </div>
     <h1>{{ v.title }}</h1>
     {% include "_flag_control.html" %}

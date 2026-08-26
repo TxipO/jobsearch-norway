@@ -114,6 +114,14 @@ MIGRATIONS = [
     # already work here; a full comment history is a bigger feature to
     # build only if this turns out not to be enough.
     ("vacancies", "notes", "TEXT"),
+    # Second scoring profile, stored alongside the default ("warehouse")
+    # score/score_breakdown columns — the "IT-support like before the
+    # 2026-08-18 warehouse retarget" toggle (2026-08-27, user-requested).
+    # Both profiles are computed and stored on every rescore_all() pass;
+    # which one drives the visible list/sort/filter is picked at request
+    # time via the "score_profile" feed_state value, see web/app.py.
+    ("vacancies", "score_it", "INTEGER"),
+    ("vacancies", "score_it_breakdown", "TEXT"),
 ]
 
 
@@ -416,6 +424,14 @@ def set_score(conn: sqlite3.Connection, uuid: str, score: int, breakdown: dict) 
     conn.commit()
 
 
+def set_score_it(conn: sqlite3.Connection, uuid: str, score: int, breakdown: dict) -> None:
+    conn.execute(
+        "UPDATE vacancies SET score_it = ?, score_it_breakdown = ? WHERE uuid = ?",
+        (score, json.dumps(breakdown, ensure_ascii=False), uuid),
+    )
+    conn.commit()
+
+
 def set_exclusion(conn: sqlite3.Connection, uuid: str, excluded: bool, reason: str | None) -> None:
     conn.execute(
         "UPDATE vacancies SET excluded = ?, exclusion_reason = ? WHERE uuid = ?",
@@ -482,6 +498,20 @@ def get_vacancy(conn: sqlite3.Connection, uuid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM vacancies WHERE uuid = ?", (uuid,)).fetchone()
 
 
+# Which stored scoring profile ("warehouse" — default, or "it") a given
+# request should read/sort/filter by. Maps to the actual column name here,
+# validated before use — a column name can't go through a `?` placeholder,
+# so it lands in the SQL text itself, and an unexpected value must fail
+# loudly rather than ever reach raw SQL.
+SCORE_PROFILE_COLUMNS = {"warehouse": "score", "it": "score_it"}
+
+
+def _score_column(profile: str) -> str:
+    if profile not in SCORE_PROFILE_COLUMNS:
+        raise ValueError(f"Unknown score profile: {profile!r}")
+    return SCORE_PROFILE_COLUMNS[profile]
+
+
 def _vacancy_filters(
     active_only: bool,
     user_status: str | list[str] | None,
@@ -494,9 +524,14 @@ def _vacancy_filters(
     show_flagged: bool = False,
     min_extent_percent: int | None = None,
     occupation_category: str | None = None,
+    score_profile: str = "warehouse",
 ) -> tuple[str, list]:
     """Shared WHERE-clause builder for list_vacancies/count_vacancies — kept
-    in one place so the two can never drift out of sync with each other."""
+    in one place so the two can never drift out of sync with each other.
+
+    score_profile picks which of the two stored scoring profiles
+    ("warehouse" — default, or "it") min_score filters against — see
+    _score_column()/SCORE_PROFILE_COLUMNS."""
     clauses = []
     params: list = []
 
@@ -549,7 +584,7 @@ def _vacancy_filters(
         like = f"%{search}%"
         params.extend([like, like, like])
     if min_score is not None:
-        clauses.append("score >= ?")
+        clauses.append(f"{_score_column(score_profile)} >= ?")
         params.append(min_score)
     if min_salary is not None:
         # salary_min is a rough leading figure, not a normalized
@@ -599,10 +634,11 @@ def count_vacancies(
     show_flagged: bool = False,
     min_extent_percent: int | None = None,
     occupation_category: str | None = None,
+    score_profile: str = "warehouse",
 ) -> int:
     where, params = _vacancy_filters(
         active_only, user_status, language, search, show_excluded, source, min_score, min_salary, show_flagged,
-        min_extent_percent, occupation_category,
+        min_extent_percent, occupation_category, score_profile,
     )
     return conn.execute(f"SELECT COUNT(*) FROM vacancies {where}", params).fetchone()[0]
 
@@ -623,12 +659,14 @@ def list_vacancies(
     show_flagged: bool = False,
     min_extent_percent: int | None = None,
     occupation_category: str | None = None,
+    score_profile: str = "warehouse",
 ) -> list[sqlite3.Row]:
     where, params = _vacancy_filters(
         active_only, user_status, language, search, show_excluded, source, min_score, min_salary, show_flagged,
-        min_extent_percent, occupation_category,
+        min_extent_percent, occupation_category, score_profile,
     )
     params = params + [limit, offset]
+    score_col = _score_column(score_profile)
 
     # application_due mixes real ISO dates with free text ("Løpende",
     # "Fortløpende opptak") — GLOB-checking the shape before sorting on it
@@ -638,13 +676,13 @@ def list_vacancies(
         "ORDER BY CASE WHEN application_due GLOB '[0-9][0-9][0-9][0-9]-*' "
         "THEN application_due ELSE '9999-99-99' END ASC"
         if sort == "deadline"
-        else "ORDER BY score DESC NULLS LAST, published DESC"
+        else f"ORDER BY {score_col} DESC NULLS LAST, published DESC"
     )
 
     return conn.execute(
         f"""
         SELECT uuid, title, business_name, municipal, language, source,
-               user_status, application_due, published, sector, score,
+               user_status, application_due, published, sector, {score_col} AS score,
                link, application_url, excluded, exclusion_reason, extent_percent, county,
                salary_text, first_seen_at, flagged_at, notes
         FROM vacancies
