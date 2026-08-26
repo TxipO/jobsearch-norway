@@ -302,6 +302,25 @@ main:has(.kanban-board) {
 .filter-field-search { flex: 1; min-width: 200px; }
 .filter-field-search input { width: 100%; }
 
+.search-input-wrap { position: relative; }
+.search-input-wrap input { padding-right: 2rem; }
+.search-clear {
+  position: absolute;
+  top: 50%;
+  right: 0.5rem;
+  transform: translateY(-50%);
+  width: 1.4rem;
+  height: 1.4rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--c-text-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.search-clear:hover { background: var(--c-hover); color: var(--c-text-sec); }
+
 .filters input, .filters select {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--c-border-hi);

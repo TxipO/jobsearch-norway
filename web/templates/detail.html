@@ -19,6 +19,11 @@
     {% if v.language %}<span class="sep">&middot;</span><span class="lang-tag">{{ v.language }}</span>{% endif %}
     <span class="sep">&middot;</span>
     <span class="source-tag">{{ v.source }}</span>
+    {% set source_url = v.application_url or v.link %}
+    {% if source_url %}
+    <span class="sep">&middot;</span>
+    <a class="source-link" href="{{ source_url }}" target="_blank" rel="noopener">Джерело &#8599;</a>
+    {% endif %}
   </div>
 
   {% if breakdown %}

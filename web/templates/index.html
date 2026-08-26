@@ -85,7 +85,13 @@
 <form class="filters" method="get" action="/">
   <div class="filter-field filter-field-search">
     <label for="f-q">Пошук</label>
-    <input type="text" id="f-q" name="q" placeholder="Назва, роботодавець, опис..." value="{{ filters.q }}">
+    <div class="search-input-wrap">
+      <input type="text" id="f-q" name="q" placeholder="Назва, роботодавець, опис..." value="{{ filters.q }}">
+      {% if filters.q %}
+      <button type="button" class="search-clear" aria-label="Очистити пошук"
+        onclick="document.getElementById('f-q').value=''; this.closest('form').submit();">&times;</button>
+      {% endif %}
+    </div>
   </div>
 
   {# Always-visible submit — code-review 2026-07-25: the only submit button
