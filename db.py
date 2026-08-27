@@ -122,6 +122,17 @@ MIGRATIONS = [
     # time via the "score_profile" feed_state value, see web/app.py.
     ("vacancies", "score_it", "INTEGER"),
     ("vacancies", "score_it_breakdown", "TEXT"),
+    # Best-effort YYYY-MM-DD normalization of application_due for sorting/
+    # expiry — NAV's own applicationDue field is stored verbatim
+    # (upsert_active_vacancy) and isn't always ISO; live corpus has ISO
+    # w/ time, dd-mm-yyyy, and d(d).m(m).yyyy all mixed in (see
+    # web/app.py's format_due, which does the same 3-pattern parse for
+    # DISPLAY only — this is the same normalization for SORTING).
+    # NULL = free text ("Løpende") or unparseable, never an error.
+    # Found 2026-08-27: sort=deadline only recognized bare ISO, silently
+    # sorting every dd.mm.yyyy-formatted NAV row as if it had no deadline
+    # at all (pushed to the very end despite being a real near-term date).
+    ("vacancies", "application_due_sort", "TEXT"),
 ]
 
 
@@ -212,10 +223,11 @@ def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: 
         """
         INSERT INTO vacancies (
             uuid, status, title, business_name, municipal, county, description,
-            employer_name, employer_orgnr, application_url, application_due, link,
+            employer_name, employer_orgnr, application_url, application_due,
+            application_due_sort, link,
             published, expires, updated, engagement_type, extent, sector,
             occupation_categories, raw_json, language, last_synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(uuid) DO UPDATE SET
             status = excluded.status,
             title = excluded.title,
@@ -227,6 +239,7 @@ def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: 
             employer_orgnr = excluded.employer_orgnr,
             application_url = excluded.application_url,
             application_due = excluded.application_due,
+            application_due_sort = excluded.application_due_sort,
             link = excluded.link,
             published = excluded.published,
             expires = excluded.expires,
@@ -251,6 +264,7 @@ def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: 
             employer.get("orgnr"),
             ad.get("applicationUrl"),
             ad.get("applicationDue"),
+            normalize_due_date(ad.get("applicationDue")),
             ad.get("link"),
             ad.get("published"),
             ad.get("expires"),
@@ -284,9 +298,9 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
         """
         INSERT INTO vacancies (
             uuid, status, title, business_name, municipal, county, description,
-            employer_name, application_url, application_due, link,
+            employer_name, application_url, application_due, application_due_sort, link,
             engagement_type, extent, sector, source, language, last_synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(uuid) DO UPDATE SET
             status = excluded.status,
             title = excluded.title,
@@ -297,6 +311,7 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
             employer_name = excluded.employer_name,
             application_url = excluded.application_url,
             application_due = excluded.application_due,
+            application_due_sort = excluded.application_due_sort,
             link = excluded.link,
             engagement_type = excluded.engagement_type,
             extent = excluded.extent,
@@ -308,7 +323,8 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
             row["uuid"], row.get("status", "ACTIVE"), row.get("title"),
             row.get("business_name"), row.get("municipal"), row.get("county"),
             row.get("description"), row.get("employer_name"),
-            row.get("application_url"), row.get("application_due"), row.get("link"),
+            row.get("application_url"), row.get("application_due"),
+            normalize_due_date(row.get("application_due")), row.get("link"),
             row.get("engagement_type"), row.get("extent"), row.get("sector"),
             source, language,
         ),
@@ -392,6 +408,34 @@ def set_salary_text(conn: sqlite3.Connection, uuid: str, salary_text: str | None
         "UPDATE vacancies SET salary_text = ?, salary_min = ? WHERE uuid = ?",
         (salary_text, salary_min, uuid),
     )
+    conn.commit()
+
+
+# Mirrors web/app.py's format_due() DUE_DATE_PATTERNS (same 3 shapes, ISO
+# first) — that one normalizes TO dd.mm.yyyy for display, this one normalizes
+# TO YYYY-MM-DD for lexicographic sort/date() comparison. Keep both in sync
+# if a new raw shape from NAV/Jobbnorge/finn shows up.
+_DUE_DATE_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+_DUE_DATE_DASH_RE = re.compile(r"^(\d{1,2})-(\d{1,2})-(\d{4})$")
+_DUE_DATE_DOT_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+
+
+def normalize_due_date(value: str | None) -> str | None:
+    """Best-effort YYYY-MM-DD for application_due; None when it's free text
+    ("Løpende") or doesn't match any known shape — never raises."""
+    if not value:
+        return None
+    m = _DUE_DATE_ISO_RE.match(value)
+    if m:
+        return f"{m[1]}-{m[2]}-{m[3]}"
+    m = _DUE_DATE_DASH_RE.match(value) or _DUE_DATE_DOT_RE.match(value)
+    if m:
+        return f"{m[3]}-{int(m[2]):02d}-{int(m[1]):02d}"
+    return None
+
+
+def set_due_sort(conn: sqlite3.Connection, uuid: str, due_sort: str | None) -> None:
+    conn.execute("UPDATE vacancies SET application_due_sort = ? WHERE uuid = ?", (due_sort, uuid))
     conn.commit()
 
 
@@ -668,13 +712,17 @@ def list_vacancies(
     params = params + [limit, offset]
     score_col = _score_column(score_profile)
 
-    # application_due mixes real ISO dates with free text ("Løpende",
-    # "Fortløpende opptak") — GLOB-checking the shape before sorting on it
-    # pushes the free-text rows to the very end instead of interleaving
-    # them lexicographically among real dates.
+    # application_due mixes real dates in several raw shapes (ISO, dd-mm-yyyy,
+    # d(d).m(m).yyyy — see normalize_due_date) with free text ("Løpende",
+    # "Fortløpende opptak"). application_due_sort is the precomputed
+    # YYYY-MM-DD form of whichever shape it was (rescore_all populates it,
+    # same pattern as extent_percent/salary_text); NULL there (free text or
+    # unparseable) sorts to the very end instead of interleaving
+    # lexicographically among real dates. Found 2026-08-27: sorting on the
+    # raw column directly (GLOB-checking for bare ISO) silently treated
+    # every non-ISO real date as if it had none at all.
     order_clause = (
-        "ORDER BY CASE WHEN application_due GLOB '[0-9][0-9][0-9][0-9]-*' "
-        "THEN application_due ELSE '9999-99-99' END ASC"
+        "ORDER BY COALESCE(application_due_sort, '9999-99-99') ASC"
         if sort == "deadline"
         else f"ORDER BY {score_col} DESC NULLS LAST, published DESC"
     )
@@ -751,15 +799,19 @@ def delete_expired_unreacted(conn: sqlite3.Connection) -> int:
     interesting/applied/interview/rejected is kept regardless of deadline
     — that's the user's own history, not clutter. ("archived" rows are
     handled separately by delete_archived — that status means "delete me",
-    not "keep me".) Only acts on a parseable ISO date in application_due;
-    free-text deadlines ("we evaluate continuously") are left alone since
-    we can't tell if they're actually expired."""
+    not "keep me".) Only acts on application_due_sort (normalize_due_date's
+    precomputed YYYY-MM-DD, covers ISO/dd-mm-yyyy/d(d).m(m).yyyy alike, see
+    upsert_active_vacancy/upsert_vacancy_row) — NULL there (free text like
+    "we evaluate continuously", or genuinely unparseable) is left alone
+    since we can't tell if it's actually expired. Before 2026-08-27 this
+    GLOB-checked the raw application_due column directly, which silently
+    never expired any row whose raw due date wasn't already ISO-shaped."""
     cur = conn.execute(
         """
         DELETE FROM vacancies
         WHERE user_status = 'new'
-          AND application_due GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'
-          AND date(substr(application_due, 1, 10)) < date('now')
+          AND application_due_sort IS NOT NULL
+          AND date(application_due_sort) < date('now')
         """
     )
     conn.commit()

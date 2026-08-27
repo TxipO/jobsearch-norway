@@ -579,6 +579,31 @@ def test_sort_by_deadline_pushes_free_text_to_the_end(tmp_path):
     assert ordered.index("far") < ordered.index("no-deadline")
 
 
+def test_sort_by_deadline_handles_non_iso_raw_shapes(tmp_path):
+    """2026-08-27 live bug: NAV stores application_due verbatim (not always
+    ISO — see normalize_due_date's docstring), so a real near-term deadline
+    written as "30.08.2026" or "10-09-2026" was silently sorted as if it had
+    no deadline at all (fell to the GLOB-miss branch, pushed to the very
+    end) instead of interleaving correctly among ISO-dated rows."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "iso-far", application_due="2026-09-27")
+    _insert_vacancy(conn, "dot-soonest", application_due="30.08.2026")
+    _insert_vacancy(conn, "dash-mid", application_due="10-09-2026")
+    _insert_vacancy(conn, "free-text", application_due="Løpende")
+
+    ordered = [r["uuid"] for r in db.list_vacancies(conn, sort="deadline")]
+    assert ordered == ["dot-soonest", "dash-mid", "iso-far", "free-text"]
+
+
+def test_normalize_due_date_all_known_shapes():
+    assert db.normalize_due_date("2026-09-08T21:59:59") == "2026-09-08"
+    assert db.normalize_due_date("30.08.2026") == "2026-08-30"
+    assert db.normalize_due_date("31.8.2026") == "2026-08-31"
+    assert db.normalize_due_date("10-09-2026") == "2026-09-10"
+    assert db.normalize_due_date("Løpende") is None
+    assert db.normalize_due_date(None) is None
+
+
 def test_count_new_high_score_only_counts_after_watermark(tmp_path):
     conn = _make_conn(tmp_path)
     _insert_vacancy(conn, "old-high")
