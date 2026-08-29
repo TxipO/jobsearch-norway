@@ -182,6 +182,8 @@ BREAKDOWN_LABELS = {
     "norwegian_fluency_penalty": "Вимога вільної норвезької",
     "occupation_category_bonus": "Категорія професії (NAV)",
     "phone_support_penalty": "Телефонний канал підтримки",
+    "dev_title_penalty": "Вакансія розробника (за назвою)",
+    "relocation_worthiness_penalty": "Переїзд не виправданий (частина ставки / короткий vikariat)",
 }
 BREAKDOWN_ORDER = list(BREAKDOWN_LABELS.keys())
 

@@ -1,3 +1,4 @@
+import html as html_module
 import json
 import re
 import shutil
@@ -186,8 +187,24 @@ def backup_db(db_path: Path = DB_PATH, backup_dir: Path = BACKUP_DIR, keep: int 
     return dest
 
 
+# Block-level boundaries become a newline (not dropped like every other tag)
+# before the rest is stripped, and entities are decoded. Both matter for
+# anything that reasons about which clause a word sits in: hard_blocks.py's
+# section/clause-scoped requirement checks and scoring.py's proximity
+# windows. Found 2026-08-29 auditing the flagged-vacancy queue: a
+# "<li>Truckførerbevis T8</li>" hard requirement sat right next to an
+# unrelated SOFTENED bullet with no boundary between them once flattened —
+# the softener ("er en fordel men ikke et krav") bled across into the real
+# requirement. Same pass found HTML entities surviving into scored text
+# ("4&#43; years" never matching a plain "4+ years" pattern) in 42% of the
+# live corpus (4503/10768 active ads).
+_BLOCK_TAG_RE = re.compile(r"</?(?:li|p|br|div|tr|h[1-6]|ul|ol|table)\b[^>]*>", re.I)
+
+
 def strip_html(html: str) -> str:
-    return re.sub(r"<[^>]+>", " ", html or "")
+    text = _BLOCK_TAG_RE.sub("\n", html or "")
+    text = re.sub(r"<[^>]+>", " ", text)
+    return html_module.unescape(text)
 
 
 def detect_language(description: str) -> str | None:
@@ -534,7 +551,7 @@ def iter_scorable_vacancies(conn: sqlite3.Connection, active_only: bool = True):
     return conn.execute(
         f"SELECT uuid, title, description, municipal, county, language, extent_percent, extent, "
         f"salary_text, salary_min, business_name, source, description_borrowed_from, user_status, "
-        f"occupation_categories FROM vacancies {where}"
+        f"occupation_categories, engagement_type FROM vacancies {where}"
     ).fetchall()
 
 

@@ -3,6 +3,7 @@ live false positives that shaped the current body-level regex (Otium's
 conditional authorisation clause, and the far+low-extent block added
 2026-07-17)."""
 
+from db import strip_html
 from hard_blocks import check_exclusion
 
 
@@ -347,6 +348,55 @@ def test_truckforerbevis_distant_generic_training_does_not_override():
         "Du trives med fysisk arbeid og høyt tempo. Du er fleksibel og pålitelig. "
         "Erfaring fra lager er en fordel, men motivasjon og arbeidsvilje er viktigst. "
         "Opplæring vil bli gitt.",
+    )
+    assert excluded
+    assert "truckførerbevis" in reason.lower()
+
+
+def test_truckforerbevis_requirement_heading_with_separate_soft_bullet_blocked():
+    """Live case, user-flagged 2026-08-29 (CargoNet "Terminalarbeider/
+    Maskinfører"): the mandatory framing is a "Kvalifikasjoner:" HEADING,
+    the certificate is its OWN bullet with no verb of its own, and a
+    softener sits in a DIFFERENT, later bullet about a more advanced
+    sub-class — none of that may cancel the base requirement. Needs
+    db.strip_html()'s block-tag-to-newline behavior to see the bullet
+    structure at all."""
+    html = (
+        "<p>Arbeidsoppgaver</p>"
+        "<ul><li>Lasting/lossing av containere (truckførerbevis T8)</li></ul>"
+        "<p>Kvalifikasjoner</p>"
+        "<ul><li>Truckførerbevis T8 (T8.4 er en fordel men ikke et krav)</li>"
+        "<li>Du er vant med bruk av dataverktøy</li></ul>"
+    )
+    excluded, reason = check_exclusion(
+        "Terminalarbeider/ Maskinfører, Bergen", strip_html(html),
+    )
+    assert excluded
+    assert "truckførerbevis" in reason.lower()
+
+
+def test_truckforerbevis_soft_bullet_under_requirement_heading_not_blocked():
+    """A softener INSIDE the bullet itself still cancels the requirement
+    even when the bullet sits under a "Kvalifikasjoner:" heading — the
+    heading sets a default, an explicit "er en fordel, men ikke et krav"
+    on the item itself overrides that default."""
+    html = (
+        "<p>Kvalifikasjoner</p>"
+        "<ul><li>Erfaring fra lager er en fordel</li>"
+        "<li>Truckførerbevis er en fordel, men ikke et krav</li></ul>"
+    )
+    excluded, _ = check_exclusion("Produksjonsmedarbeider", strip_html(html))
+    assert not excluded
+
+
+def test_truckforerbevis_bare_possession_phrasing_blocked():
+    """Live case (Pecus "Full fart på lageret – vi trenger deg med T3!",
+    user-flagged 2026-08-29): no "må ha"/"krav" verb anywhere, just plain
+    possession framing ("som har truckførerbevis T3") — must still block,
+    the old per-mention-verb-only rule missed this shape entirely."""
+    excluded, reason = check_exclusion(
+        "Full fart på lageret – vi trenger deg med T3!",
+        "Vi søker først og fremst deg som har truckførerbevis T3 og god erfaring med å kjøre T3-truck.",
     )
     assert excluded
     assert "truckførerbevis" in reason.lower()

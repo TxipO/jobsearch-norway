@@ -46,24 +46,42 @@ IT_SUPPORT_KEYWORDS = [
 # sales assistant/shop assistant) removed. Replaced with production/
 # warehouse/logistics terms backed by the same real experience angle (Verna:
 # delivery, install, on-site tech service) plus the user's own steer toward
-# factory/warehouse work and truckførerbevis (achievable without a driving
-# licence — verified via web research, see jobsearch-norway-profile memory).
-# Each addition checked against the live corpus first (same discipline as
-# the REMOTE_KEYWORDS fixes): "matproduksjon" and "varemottak" were tried
-# and DROPPED — both are generic enough to appear constantly in kitchen/
-# restaurant/café job ads ("Kokk", "kjøkkensjef", "tilkallingsvikar på
-# kjøkkenet"), exactly the category just rejected. "industrimekaniker" was
-# also dropped — it's itself a fagbrev-gated skilled trade (same class as
-# elektriker/tømrer in hard_blocks.py), not an entry-level role; scoring it
-# up would fight hard_blocks' own judgment on lookalike titles.
+# factory/warehouse work. Each addition checked against the live corpus
+# first (same discipline as the REMOTE_KEYWORDS fixes): "matproduksjon" and
+# "varemottak" were tried and DROPPED — both are generic enough to appear
+# constantly in kitchen/restaurant/café job ads ("Kokk", "kjøkkensjef",
+# "tilkallingsvikar på kjøkkenet"), exactly the category just rejected.
+# "industrimekaniker" was also dropped — it's itself a fagbrev-gated
+# skilled trade (same class as elektriker/tømrer in hard_blocks.py), not an
+# entry-level role; scoring it up would fight hard_blocks' own judgment on
+# lookalike titles.
 GENERAL_ENTRY_KEYWORDS = [
     "kundeservice", "kundebehandling", "lagermedarbeider", "logistikk",
-    "vikar", "ekstrahjelp", "deltid", "sommerjobb", "montør", "vaktmester",
+    "ekstrahjelp", "sommerjobb", "montør", "vaktmester",
     "teknisk service", "customer service", "warehouse",
     "produksjonsmedarbeider", "produksjonsarbeider", "prosessoperatør",
-    "maskinoperatør", "lagerarbeid", "logistikkoperatør", "truckfører",
-    "truckførerbevis", "terminalarbeid", "pakkeri",
+    "maskinoperatør", "lagerarbeid", "logistikkoperatør",
+    "terminalarbeid", "pakkeri",
 ]
+# "truckfører"/"truckførerbevis" removed 2026-08-29 — the user isn't
+# pursuing the certificate independently (see hard_blocks.py's
+# TRUCKFORERBEVIS block, added 2026-08-26), so a mention of it, soft or
+# hard, is never actually a point in the vacancy's favor; a hard
+# requirement is now a full exclusion, and a soft mention shouldn't earn a
+# bonus for a certificate the user doesn't have either.
+#
+# "vikar"/"deltid" moved OUT to GENERAL_ENTRY_TITLE_KEYWORDS below
+# 2026-08-29 — same "bare word needs to describe the position itself, not
+# just appear somewhere in the body" lesson as junior/trainee
+# (ENTRY_LEVEL_TITLE_KEYWORDS above). Live audit: "vikar" matched 2377
+# active ads' bodies but only 39% also had it in the title — the rest was
+# generic HR boilerplate ("midlertidig engasjerte eller vikarer som har
+# vært...", a legal-notice paragraph) or employee-benefits text
+# ("fleksitid, deltid o.l."), nothing to do with the vacancy's own nature.
+# Caught concretely on UiT's "Ledig stilling innen IT-infrastruktur"
+# (Overingeniør, 3-year project post) picking up +12 from exactly this
+# boilerplate.
+GENERAL_ENTRY_TITLE_KEYWORDS = ["vikar", "deltid"]
 # NOTE: bare "lager" (meant as "warehouse") deliberately excluded — live
 # false-positive audit 2026-07-18 found it matching the Norwegian verb
 # "å lage" ("to make"), conjugated "lager" ("makes"), in ordinary business
@@ -121,6 +139,23 @@ YEARS_EXPERIENCE_PATTERNS = [
     r"\d+\+ years('? )?( of)? experience",
     r"flere års erfaring",
 ]
+
+# Title-level "this role IS a developer role" markers — user-requested
+# 2026-08-29 ("я не розробник, якщо це основна ціль вакансії — мені це не
+# треба"): a big penalty when the JOB ITSELF is a dev/data-engineering
+# role, independent of and on top of DEV_SECURITY_KEYWORDS' own body-text
+# bonus (that bonus is for a support/ops role that merely *mentions*
+# Python/scripting as a nice-to-have skill — a genuinely different signal
+# from the role's own title). Title-only, same reasoning as
+# SENIOR_TITLE_KEYWORDS/ENTRY_LEVEL_TITLE_KEYWORDS: checked against the
+# live corpus (2026-08-29, 38 dev-titled active ads) — 0 collide with
+# support/servicedesk/brukerstøtte/drift titles.
+DEV_TITLE_KEYWORDS = [
+    "utvikler", "developer", "programmerer", "data engineer",
+    "software engineer", "fullstack", "full-stack", "full stack",
+    "backend", "frontend", "devops", "data scientist", "dataingeniør",
+]
+DEV_TITLE_PENALTY = -40
 
 # People-management requirement — checked against the BODY, not the title.
 # Added 2026-08-15 after "Er du en trygg leder som brenner for å levere god
@@ -254,6 +289,39 @@ TIER_1_MUNICIPALS = {
     "VIK", "HØYANGER", "ÅRDAL",
 }
 
+# Relocation-worthiness penalty — user-requested 2026-08-29: within
+# TIER_1_MUNICIPALS (or remote — no physical move needed either way), a
+# short/part-time contract is a fine way to earn locally. Beyond that, it's
+# only worth actually relocating for if the job pays like a real move —
+# under 80% extent, or a Vikariat not proven to run at least a year, isn't
+# ("все інше — це буде переїзд, а там вже треба нормальні гроші
+# заробляти"). Two independent axes, checked in score_vacancy():
+#   - RELOCATION_MIN_EXTENT_PERCENT: extent_percent below this = penalty.
+#   - VIKARIAT_LONG_DURATION_RE: a Vikariat-family engagement_type not
+#     matching this = penalty. Proximity-scoped to the word "vikariat"/
+#     "engasjement"/"stilling"/"kontrakt" itself (not a bare "X år"
+#     anywhere in the text, which mostly means "years of experience
+#     required", not contract length — measured live 2026-08-29: a bare
+#     "\d+ år" match hit "20 års erfaring" and similar nonsense 100% of the
+#     time in a first pass). 93% of live Vikariat-type ads (1703/1837)
+#     state no duration at all — unlike extent_percent (where "unknown"
+#     stays neutral, the hard_blocks.py convention), an unstated Vikariat
+#     duration defaults to "assume short" here: "vikariat" itself means
+#     "temporary substitute" in Norwegian labor practice, and the stakes
+#     are lower than a hard exclude — this is a reversible scoring
+#     penalty, still visible via the score toggle, not an invisible block.
+#     Measured against the full live corpus: 106 ads cleanly match as
+#     >=12 months (0 false positives against "years of experience"
+#     collisions), 28 cleanly state <12 months, the rest are unstated.
+RELOCATION_MIN_EXTENT_PERCENT = 80
+RELOCATION_PENALTY = -40
+VIKARIAT_LONG_DURATION_RE = re.compile(
+    r"(?:vikariat|engasjement|stilling(?:en)?|kontrakt)\D{0,20}(?:i |på |for )?"
+    r"(?:(?:ett|1|12)\s*(?:-årig|års?)|1[2-9]\s*måneder|(?:1[2-9]|[2-9]\d)\s*måneders)|"
+    r"(?:(?:ett|1|12)\s*(?:-årig|års?)|1[2-9]\s*måneder|(?:1[2-9]|[2-9]\d)\s*måneders)"
+    r"\D{0,20}(?:vikariat|engasjement|stilling(?:en)?|kontrakt)"
+)
+
 DEGREE_REQUIRED_PATTERNS = [
     r"bachelorgrad (kreves|er (et )?krav)",
     r"mastergrad (kreves|er (et )?krav)",
@@ -317,6 +385,8 @@ def score_vacancy(
     language: str | None = None,
     occupation_categories: str | None = None,
     profile: str = "warehouse",
+    extent_percent: int | None = None,
+    engagement_type: str | None = None,
 ) -> tuple[int, dict]:
     title_l = (title or "").lower()
     text = f"{title_l} {strip_html(description_html)}".lower()
@@ -338,12 +408,19 @@ def score_vacancy(
     # permanent decision (see jobsearch-norway-profile memory), independent
     # of which profile is active.
     entry_hits, entry_kw = _count_keyword_hits(text, GENERAL_ENTRY_KEYWORDS)
-    entry_track_score = min(entry_hits * 6, 30) if profile == "warehouse" else 0
-    breakdown["track_general_entry_level"] = {"points": entry_track_score, "matched": entry_kw}
+    entry_title_hits = [kw for kw in GENERAL_ENTRY_TITLE_KEYWORDS if kw in title_l]
+    entry_track_score = (
+        min((entry_hits + len(entry_title_hits)) * 6, 30) if profile == "warehouse" else 0
+    )
+    breakdown["track_general_entry_level"] = {"points": entry_track_score, "matched": entry_kw + entry_title_hits}
 
     dev_hits, dev_kw = _count_keyword_hits(text, DEV_SECURITY_KEYWORDS)
     dev_score = min(dev_hits * 3, 15)
     breakdown["track_dev_security"] = {"points": dev_score, "matched": dev_kw}
+
+    is_dev_title = any(kw in title_l for kw in DEV_TITLE_KEYWORDS)
+    dev_title_penalty = DEV_TITLE_PENALTY if is_dev_title else 0
+    breakdown["dev_title_penalty"] = {"points": dev_title_penalty, "matched": is_dev_title}
 
     is_entry_level = (
         any(kw in text for kw in ENTRY_LEVEL_PHRASES)
@@ -415,13 +492,33 @@ def score_vacancy(
     # PENALTY always applies — rejecting retail/hospitality was a separate,
     # permanent decision, not tied to which track is currently favored.
     category_l1 = _parse_occupation_category_level1(occupation_categories)
-    category_bonus = sum(OCCUPATION_CATEGORY_BONUS.get(c, 0) for c in category_l1) if profile == "warehouse" else 0
+    # Capped at the single-category value (15), not summed — a listing
+    # tagged with both bonus categories (e.g. "Industri og produksjon" +
+    # "Transport og lager") is still just one job, not doubly relevant.
+    # Live case 2026-08-29: "Ekstrahjelp Skanem Bergen" got +30 from this
+    # stacking alone, more than track_general_entry_level's own 30-point cap.
+    category_bonus_raw = sum(OCCUPATION_CATEGORY_BONUS.get(c, 0) for c in category_l1)
+    category_bonus = min(category_bonus_raw, 15) if profile == "warehouse" else 0
     category_penalty = sum(OCCUPATION_CATEGORY_PENALTY.get(c, 0) for c in category_l1)
     breakdown["occupation_category_bonus"] = {"points": category_bonus + category_penalty, "matched": sorted(category_l1)}
 
     is_phone_support = any(kw in text for kw in PHONE_SUPPORT_KEYWORDS)
     phone_penalty = -10 if is_phone_support else 0
     breakdown["phone_support_penalty"] = {"points": phone_penalty, "matched": is_phone_support}
+
+    # See RELOCATION_MIN_EXTENT_PERCENT/VIKARIAT_LONG_DURATION_RE for the
+    # full rationale. Waived inside TIER_1 (local, no relocation needed) and
+    # for a remote/hjemmekontor role (is_remote, computed above — physical
+    # municipal doesn't matter when the work itself isn't tied to it).
+    needs_relocation = municipal_u not in TIER_1_MUNICIPALS and not is_remote
+    low_extent = needs_relocation and extent_percent is not None and extent_percent < RELOCATION_MIN_EXTENT_PERCENT
+    is_vikariat = (engagement_type or "").lower().startswith("vikariat")
+    short_vikariat = needs_relocation and is_vikariat and not VIKARIAT_LONG_DURATION_RE.search(text)
+    relocation_penalty = (RELOCATION_PENALTY if low_extent else 0) + (RELOCATION_PENALTY if short_vikariat else 0)
+    breakdown["relocation_worthiness_penalty"] = {
+        "points": relocation_penalty,
+        "matched": {"low_extent": low_extent, "short_vikariat": short_vikariat},
+    }
 
     base = 10
     total = base + sum(v["points"] for v in breakdown.values())
@@ -579,6 +676,7 @@ def rescore_all(conn) -> dict:
         score, breakdown = score_vacancy(
             row["title"], description, row["municipal"], row["county"], language,
             row["occupation_categories"], profile="warehouse",
+            extent_percent=extent_pct, engagement_type=row["engagement_type"],
         )
         db.set_score(conn, row["uuid"], score, breakdown)
 
@@ -592,6 +690,7 @@ def rescore_all(conn) -> dict:
         score_it, breakdown_it = score_vacancy(
             row["title"], description, row["municipal"], row["county"], language,
             row["occupation_categories"], profile="it",
+            extent_percent=extent_pct, engagement_type=row["engagement_type"],
         )
         db.set_score_it(conn, row["uuid"], score_it, breakdown_it)
 

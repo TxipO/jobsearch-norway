@@ -5,8 +5,12 @@ inspecting score_breakdown on an actual vacancy, not a hypothetical."""
 from scoring import _parse_salary, _salary_min_value, score_vacancy
 
 
-def _score(title, description, municipal=None, county=None, language="no", occupation_categories=None):
-    return score_vacancy(title, description, municipal, county, language, occupation_categories)
+def _score(title, description, municipal=None, county=None, language="no", occupation_categories=None,
+           profile="warehouse", extent_percent=None, engagement_type=None):
+    return score_vacancy(
+        title, description, municipal, county, language, occupation_categories, profile,
+        extent_percent, engagement_type,
+    )
 
 
 def test_junior_in_body_does_not_grant_entry_level_bonus():
@@ -148,11 +152,21 @@ def test_production_and_warehouse_keywords_match():
     warehouse instead. New keywords must actually fire."""
     for title, description in [
         ("Produksjonsmedarbeider", "Vi søker produksjonsmedarbeider til vår fabrikk."),
-        ("Truckfører", "Du har truckførerbevis og trives med fysisk arbeid på lager."),
+        ("Maskinoperatør", "Du kjører maskinoperatør-linjen og trives med fysisk arbeid på lager."),
         ("Prosessoperatør", "Som prosessoperatør styrer du produksjonslinjen."),
     ]:
         _, bd = _score(title, description)
         assert bd["track_general_entry_level"]["points"] > 0, title
+
+
+def test_truckforerbevis_no_longer_a_positive_keyword():
+    """Removed 2026-08-29 — the user isn't pursuing the certificate
+    independently (hard_blocks.py's TRUCKFORERBEVIS block already excludes
+    a firm requirement), so a soft mention shouldn't earn a bonus for a
+    certificate the user doesn't have either."""
+    _, bd = _score("Truckfører", "Du har truckførerbevis og trives med fysisk arbeid på lager.")
+    assert "truckfører" not in bd["track_general_entry_level"]["matched"]
+    assert "truckførerbevis" not in bd["track_general_entry_level"]["matched"]
 
 
 def test_retail_keywords_removed_from_general_entry_track():
@@ -356,3 +370,99 @@ def test_phone_support_channel_is_penalized():
 def test_written_support_not_penalized():
     _, bd = _score("Support Agent", "Du besvarer henvendelser via chat og e-post.")
     assert bd["phone_support_penalty"]["points"] == 0
+
+
+def test_occupation_category_bonus_capped_not_summed():
+    """2026-08-29 live bug: a listing tagged with BOTH bonus categories
+    (Industri og produksjon + Transport og lager) got +30, more than the
+    dedicated keyword track's own 30-point cap, from a single NAV tag pair
+    that's still just one job. Capped at 15 (a single category's value)."""
+    import json
+    cats = json.dumps([
+        {"level1": "Industri og produksjon", "level2": "X"},
+        {"level1": "Transport og lager", "level2": "Y"},
+    ])
+    _, bd = _score("Ekstrahjelp", "Vi søker ekstrahjelp.", occupation_categories=cats)
+    assert bd["occupation_category_bonus"]["points"] == 15
+
+
+def test_dev_title_penalty_applies_to_developer_roles():
+    """2026-08-29 user-requested: "я не розробник, якщо це основна ціль
+    вакансії — мені це не треба" — a big penalty when the role ITSELF is a
+    dev/data-engineering position, independent of profile."""
+    for title in ("Utvikler til Navs kontaktsenter", "Data Engineer in Data Product Engineering",
+                  "Backend Developer"):
+        _, bd = _score(title, "Vi bygger løsninger i Python og Kotlin.")
+        assert bd["dev_title_penalty"]["points"] < 0, title
+
+
+def test_dev_title_penalty_does_not_hit_support_roles_that_mention_python():
+    """A support/ops role that merely mentions Python as a nice-to-have
+    skill is a different signal from the role's own title being a dev
+    role — must not be penalized."""
+    _, bd = _score("IT-driftstekniker", "Du drifter systemer, litt Python-skripting er en fordel.")
+    assert bd["dev_title_penalty"]["points"] == 0
+
+
+def test_dev_title_penalty_applies_regardless_of_profile():
+    _, bd_it = _score("Backend Developer", "Vi bygger løsninger i Python.", profile="it")
+    assert bd_it["dev_title_penalty"]["points"] < 0
+
+
+def test_relocation_penalty_low_extent_outside_tier1():
+    """User-requested 2026-08-29: outside the Sogndal/Sogn commute radius,
+    relocating only makes sense for near-full-time work."""
+    _, bd = _score("Lagermedarbeider", "Vi søker deg.", municipal="Oslo", county="Oslo",
+                    extent_percent=50)
+    assert bd["relocation_worthiness_penalty"]["points"] < 0
+    assert bd["relocation_worthiness_penalty"]["matched"]["low_extent"] is True
+
+
+def test_relocation_penalty_waived_inside_tier1():
+    _, bd = _score("Lagermedarbeider", "Vi søker deg.", municipal="Sogndal", county="Vestland",
+                    extent_percent=50)
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
+
+
+def test_relocation_penalty_waived_for_remote_roles():
+    """A remote/hjemmekontor role needs no physical relocation regardless
+    of the employer's registered municipal."""
+    _, bd = _score("Support Agent", "100 % hjemmekontor. Deltidsstilling 50%.", municipal="Oslo",
+                    county="Oslo", extent_percent=50)
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
+
+
+def test_relocation_penalty_full_extent_not_penalized():
+    _, bd = _score("Lagermedarbeider", "Vi søker deg.", municipal="Oslo", county="Oslo",
+                    extent_percent=100)
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
+
+
+def test_relocation_penalty_short_vikariat_outside_tier1():
+    _, bd = _score("Klinikksekretær", "6 måneders vikariat med snarlig oppstart.",
+                    municipal="Oslo", county="Oslo", engagement_type="Vikariat")
+    assert bd["relocation_worthiness_penalty"]["points"] < 0
+    assert bd["relocation_worthiness_penalty"]["matched"]["short_vikariat"] is True
+
+
+def test_relocation_penalty_long_vikariat_not_penalized():
+    _, bd = _score("Klinikksekretær", "Vikariatet har ett års varighet.",
+                    municipal="Oslo", county="Oslo", engagement_type="Vikariat")
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
+
+
+def test_relocation_penalty_unstated_vikariat_duration_defaults_risky():
+    """93% of live Vikariat-type ads state no duration at all — unlike
+    extent_percent (unknown = neutral), an unstated Vikariat duration
+    defaults to "assume short" here: it's a reversible scoring penalty,
+    not an invisible hard exclude, and "vikariat" itself means "temporary
+    substitute" in Norwegian labor practice."""
+    _, bd = _score("Klinikksekretær", "Vi søker en vikar til avdelingen.",
+                    municipal="Oslo", county="Oslo", engagement_type="Vikariat")
+    assert bd["relocation_worthiness_penalty"]["points"] < 0
+
+
+def test_relocation_penalty_non_vikariat_engagement_not_penalized_by_duration():
+    _, bd = _score("Lagermedarbeider", "Vi søker deg.", municipal="Oslo", county="Oslo",
+                    extent_percent=100, engagement_type="Fast")
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
