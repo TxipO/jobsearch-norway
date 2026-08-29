@@ -400,3 +400,94 @@ def test_truckforerbevis_bare_possession_phrasing_blocked():
     )
     assert excluded
     assert "truckførerbevis" in reason.lower()
+
+
+# --- Round 2 (2026-08-29): English headings, forklift-certificate (EN),
+# engineering/trade titles, widened heading vocabulary --------------------
+
+def test_english_requirements_heading_recognized():
+    """Live case (ABB "Project Engineer - Automation", CNC operator,
+    Instrumentation Technician — all English-language NAV listings from
+    staffing agencies): "Requirements"/"Your background" headings weren't
+    recognized at all before, so nothing in the ad was ever "in a required
+    section" — a forklift-certificate bullet under one with no verb of its
+    own went unblocked."""
+    html = (
+        "<p>Requirements</p>"
+        "<ul><li>Forklift certificate</li></ul>"
+    )
+    excluded, reason = check_exclusion("Warehouse worker", strip_html(html))
+    assert excluded
+    assert "forklift" in reason.lower()
+
+
+def test_forklift_certificate_english_hard_requirement_blocked():
+    """Live case, user-flagged 2026-08-29: "Warehouse workers with forklift
+    certificate" — NAV's own truckførerbevis check is Norwegian-only."""
+    excluded, reason = check_exclusion(
+        "Warehouse workers with forklift certificate",
+        "We are looking for motivated warehouse workers with a valid forklift certificate. "
+        "Desired qualifications: Valid forklift certificate T1–T4 is required.",
+    )
+    assert excluded
+    assert "forklift" in reason.lower()
+
+
+def test_forklift_certificate_english_soft_mention_not_blocked():
+    excluded, _ = check_exclusion(
+        "Terminal Tractor Operator",
+        "A forklift license for T1, T2, and T4 is considered an advantage.",
+    )
+    assert not excluded
+
+
+def test_engineering_discipline_title_blocked():
+    """Live case, user-flagged 2026-08-29 (Brunvoll "Elektroingeniører",
+    Safe Bemanning "Maskiningeniører") — a bachelor's/master's in the named
+    discipline, not a bare "ingeniør" (see ENGINEERING_TITLE_PATTERNS'
+    own comment for why bare "ingeniør" would wrongly catch "Overingeniør
+    — Brukerstøtte IT")."""
+    excluded, reason = check_exclusion("Elektroingeniører søkes", "")
+    assert excluded
+    assert "інженерн" in reason.lower()
+
+
+def test_bare_ingenior_title_not_blocked():
+    """Overingeniør — Brukerstøtte IT (49 in the live corpus) must stay
+    visible — a bare "ingeniør"/"overingeniør" title says nothing about
+    which discipline, and this one is an IT-support role."""
+    excluded, _ = check_exclusion("Overingeniør - Brukerstøtte IT", "")
+    assert not excluded
+
+
+def test_industrimekaniker_automatiker_cnc_titles_blocked():
+    """Added 2026-08-29 — these were already excluded from
+    GENERAL_ENTRY_KEYWORDS as fagbrev-gated trades (scoring.py), but the
+    matching hard_blocks title-block was never actually added."""
+    for title in ("Industrimekaniker søkes", "Automatiker ved fabrikk", "CNC-operatør"):
+        excluded, _ = check_exclusion(title, "")
+        assert excluded, title
+
+
+def test_widened_norwegian_heading_with_prefix_recognized():
+    """Live case (Brunvoll): "Relevante kvalifikasjoner" (adjective prefix)
+    wasn't recognized as a heading before — only the bare word — so a
+    truckførerbevis bullet under it with no verb of its own went
+    unblocked."""
+    html = "<p>Relevante kvalifikasjoner</p><ul><li>Truckførerbevis T1-T4</li></ul>"
+    excluded, reason = check_exclusion("Lagermedarbeider", strip_html(html))
+    assert excluded
+    assert "truckførerbevis" in reason.lower()
+
+
+def test_explicit_hard_verb_overrides_optional_heading():
+    """Live case (Warehouse forklift ad): the certificate sits under
+    "Desired qualifications:" (an OPTIONAL heading), but the item itself
+    says "is required" — an explicit hard verb in the clause must win
+    regardless of which heading it's under."""
+    html = (
+        "<p>Desired qualifications</p>"
+        "<ul><li>Valid forklift certificate T1–T4 is required</li></ul>"
+    )
+    excluded, _ = check_exclusion("Warehouse worker", strip_html(html))
+    assert excluded

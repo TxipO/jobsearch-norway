@@ -466,3 +466,85 @@ def test_relocation_penalty_non_vikariat_engagement_not_penalized_by_duration():
     _, bd = _score("Lagermedarbeider", "Vi søker deg.", municipal="Oslo", county="Oslo",
                     extent_percent=100, engagement_type="Fast")
     assert bd["relocation_worthiness_penalty"]["points"] == 0
+
+
+def test_feilsoking_alone_does_not_grant_it_support_bonus():
+    """2026-08-29 live bug: "feilsøking" (troubleshooting) matched as the
+    ONLY IT-support keyword in 139 active ads, almost all mechanical/
+    industrial titles (Testingeniør, Industrimekaniker, boat mechanics).
+    Only counts alongside another real IT-support keyword."""
+    _, bd = _score("Industrimekaniker", "Du driver feilsøking og reparasjon av maskiner.")
+    assert bd["track_it_support"]["points"] == 0
+    _, bd = _score("IT-konsulent", "Du driver med feilsøking og brukerstøtte for våre kunder.")
+    assert bd["track_it_support"]["points"] > 0
+
+
+def test_formal_qualification_penalty_non_it_degree():
+    """Live case (ABB "Project Engineer - Automation", user-flagged
+    2026-08-29): a degree requirement stated as its own bullet under a
+    "Your background:" heading, no verb of its own."""
+    _, bd = _score(
+        "Project Engineer - Automation",
+        "<p>Your background</p><ul><li>Bachelor's or master's degree in a relevant technical field</li></ul>",
+    )
+    assert bd["formal_qualification_penalty"]["points"] < 0
+
+
+def test_formal_qualification_penalty_waived_for_it_field():
+    """The user's own bachelor's is in cybersecurity — a qualification
+    clause naming IT/informatikk as an accepted field must not be
+    penalized. Live case: "IT-driftstekniker" (59) lists "fagbrev, fagskole
+    eller annen relevant høyere IT-utdanning"."""
+    _, bd = _score(
+        "IT-driftstekniker",
+        "Kvalifikasjoner: Fagbrev, fagskole eller annen relevant høyere IT-utdanning.",
+    )
+    assert bd["formal_qualification_penalty"]["points"] == 0
+
+
+def test_formal_qualification_penalty_waived_for_soft_mention():
+    _, bd = _score(
+        "Produksjonsmedarbeider med fagbrev",
+        "Fagbrev er en fordel, men ikke et krav.",
+    )
+    assert bd["formal_qualification_penalty"]["points"] == 0
+
+
+def test_programming_experience_penalty():
+    """Live case (Arkiv Trøndelag "IT-rådgiver/IT-konsulent", re-flagged
+    2026-08-29): no dev title, but explicit hands-on coding experience
+    wanted."""
+    _, bd = _score(
+        "IT-rådgiver/IT-konsulent",
+        "I praksis betyr det at du har: erfaring med programmering og skripting (f.eks. Python).",
+    )
+    assert bd["programming_experience_penalty"]["points"] < 0
+
+
+def test_location_bonus_bergen_matches_oslo_tier():
+    """User-requested 2026-08-29: Bergen should score the same as Oslo and
+    its commute belt (Akershus, Buskerud, Lillestrøm) — both are the
+    country's biggest job markets, worth relocating for even though
+    neither is the Sogndal/Sogn home region."""
+    _, bd_bergen = _score("Test", "Vi søker deg.", municipal="Bergen", county="Vestland")
+    _, bd_oslo = _score("Test", "Vi søker deg.", municipal="Oslo", county="Oslo")
+    _, bd_lillestrom = _score("Test", "Vi søker deg.", municipal="Lillestrøm", county="Akershus")
+    assert bd_bergen["location_bonus"]["points"] == bd_oslo["location_bonus"]["points"]
+    assert bd_bergen["location_bonus"]["points"] == bd_lillestrom["location_bonus"]["points"]
+    assert bd_bergen["location_bonus"]["points"] > 0
+
+
+def test_location_bonus_bergen_tier_beats_generic_vestland():
+    """Bergen itself must score higher than a generic remote Vestland
+    fjord municipality, not just tie with it."""
+    _, bd_bergen = _score("Test", "Vi søker deg.", municipal="Bergen", county="Vestland")
+    _, bd_other = _score("Test", "Vi søker deg.", municipal="Bremanger", county="Vestland")
+    assert bd_bergen["location_bonus"]["points"] > bd_other["location_bonus"]["points"]
+
+
+def test_location_bonus_tier1_still_beats_tier2():
+    """The Sogndal/Sogn home region (no relocation needed at all) must
+    still score higher than the Oslo/Bergen major-market tier."""
+    _, bd_home = _score("Test", "Vi søker deg.", municipal="Sogndal", county="Vestland")
+    _, bd_oslo = _score("Test", "Vi søker deg.", municipal="Oslo", county="Oslo")
+    assert bd_home["location_bonus"]["points"] > bd_oslo["location_bonus"]["points"]
