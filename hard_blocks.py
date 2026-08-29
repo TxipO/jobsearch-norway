@@ -78,12 +78,35 @@ ACADEMIC_TITLE_PATTERNS = [
 ]
 
 # Skilled trades gated behind a Norwegian fagbrev / certificate of
-# apprenticeship.
+# apprenticeship. automatiker/industrimekaniker/instrumenttekniker/CNC-
+# operatør/platearbeider/industrirørlegger added 2026-08-29 — measured
+# against the live corpus (0 collisions with support/IT titles): these were
+# already excluded from GENERAL_ENTRY_KEYWORDS as "itself a fagbrev-gated
+# skilled trade" (see that list's own comment in scoring.py), but the
+# matching hard_blocks title-block was never actually added until now.
 TRADE_TITLE_PATTERNS = [
     r"\belektriker", r"\belektrikar", r"\brørlegger", r"\brøyrleggjar",
     r"\btømrer", r"\btømrar", r"\bsveiser", r"\bsveisar",
     r"\bfrisør", r"\bbilmekaniker", r"\bmekanikar",
     r"\banleggsmaskinfører", r"\bkranfører",
+    r"\bautomatiker", r"\bautomatikar", r"\bindustrimekaniker", r"\bindustrimekanikar",
+    r"\binstrumenttekniker", r"\binstrumentation technician", r"\bcnc\b",
+    r"\bplatearbeider", r"\bplatearbeidar", r"\bindustrirørlegger",
+]
+
+# Named engineering disciplines requiring a bachelor's/master's degree in
+# that specific field — added 2026-08-29, user-flagged (Brunvoll
+# "Elektroingeniører", Safe Bemanning "Maskiningeniører"). Deliberately NOT
+# a bare "ingeniør" — measured live: that would also catch "Overingeniør —
+# Brukerstøtte IT" (49) and "Overingeniør i Microsoft 365" (46), exactly
+# the support-adjacent titles this profile is FOR. Only the named
+# disciplines the user has no degree in.
+ENGINEERING_TITLE_PATTERNS = [
+    r"\belektroingeniør", r"\belkraftingeniør", r"\bmaskiningeniør",
+    r"\bsivilingeniør", r"\bbygningsingeniør", r"\bkjemiingeniør",
+    r"\bprosessingeniør", r"\bautomasjonsingeniør", r"\bkonstruksjonsingeniør",
+    r"\bmechanical engineer\b", r"\bchemical engineer\b",
+    r"\bcivil engineer\b", r"\bstructural engineer\b",
 ]
 
 # Roles requiring driving/maritime certificates the user does not hold
@@ -143,6 +166,7 @@ BLOCK_CATEGORIES = [
     ("pedagogisk utdanning", TEACHING_TITLE_PATTERNS, "Потрібна норвезька педагогічна освіта"),
     ("akademisk grad", ACADEMIC_TITLE_PATTERNS, "Потрібен PhD / магістр (академічна позиція)"),
     ("fagbrev", TRADE_TITLE_PATTERNS, "Потрібен норвезький fagbrev"),
+    ("ingeniorfag", ENGINEERING_TITLE_PATTERNS, "Потрібна вища освіта (bachelor/master) за конкретним інженерним фахом"),
     ("sertifikat", LICENCE_TITLE_PATTERNS, "Потрібні права / морський сертифікат"),
     ("autorisert yrke", LEGAL_FINANCE_TITLE_PATTERNS, "Регульована професія (право/аудит)"),
     ("laerling", APPRENTICESHIP_TITLE_PATTERNS, "Потрібна завершена Vg1/Vg2 videregående (учнівство)"),
@@ -259,26 +283,45 @@ EU_PASSPORT_REQUIREMENT_RE = re.compile(r"eu[\s-]?passport", re.I)
 # structure at all. This needs db.strip_html()'s block-tag-to-newline
 # behavior (2026-08-29) to work — body_l here is expected to already have
 # one bullet/paragraph per line.
+# Widened 2026-08-29 (round 2 of the flagged-queue audit): English headings
+# were missing entirely (ABB/CNC/Instrumentation Technician ads — "Your
+# background:", "Requirements", "Education & Experience" — had NO heading
+# recognized at all, so nothing was ever "in a required section"), and
+# Norwegian headings didn't tolerate a prefix/compound form ("Relevante
+# kvalifikasjoner", "Kvalifikasjoner og personlige egenskaper", "Dette må du
+# ha for å lykkes i stillingen").
 REQUIREMENT_HEADING_RE = re.compile(
-    r"^(?:kvalifikasjoner|kvalifikasjonar|kvalifikasjonskrav|krav til søker|"
-    r"krav til deg|kompetansekrav|formelle krav|vi krever|vi krev|"
-    r"du må ha|den som ansettes må ha|den som tilsettes må ha|"
-    r"dette må du ha|må du ha|krav|hvem ser vi etter|hvem er du|"
-    r"vi ser etter deg som|vi søker deg som|om deg)\s*[:–-]*$"
+    r"^(?:\w+\s+)?(?:kvalifikasjoner|kvalifikasjonar|kvalifikasjonskrav)"
+    r"(?:\s+og\s+[\wæøå\s]+)?\s*[:–-]*$"
+    r"|^(?:krav til (?:søker|deg)|kompetansekrav|formelle krav|vi krever|vi krev)\s*[:–-]*$"
+    r"|^(?:du må ha|den som (?:ansettes|tilsettes) må ha|dette må du ha[\wæøå\s]*)\s*[:–-]*$"
+    r"|^(?:i praksis betyr det at du har|vi ser etter deg som|vi søker deg som|"
+    r"hvem ser vi etter|hvem er du|om deg)\s*[:–-]*$"
+    r"|^(?:requirements?|qualifications?|your background|"
+    r"education\s*(?:&|and)\s*experience|"
+    r"what we(?:'re| are) looking for|what we expect|who you are|"
+    r"required qualifications|minimum qualifications|"
+    r"skills?\s*(?:&|and)\s*experience)\s*[:–-]*$"
 )
 OPTIONAL_HEADING_RE = re.compile(
     r"^(?:ønskede kvalifikasjoner|ønskelige kvalifikasjoner|ønskelig|"
-    r"ønsket kompetanse|fordelaktig|det er en fordel|vi ser gjerne|"
+    r"ønsket kompetanse|fordelaktig|det er en fordel(?:\s+om du har)?|vi ser gjerne|"
     r"personlige egenskaper|vi tilbyr|vi kan tilby|arbeidsoppgaver|"
     r"om stillingen|andre ønsker|fordeler)\s*[:–-]*$"
+    r"|^(?:we offer|responsibilities|nice to have|preferred qualifications|benefits|"
+    r"personal qualities|what we offer|desired qualifications)\s*[:–-]*$"
 )
 _CLAUSE_SPLIT_RE = re.compile(r"(?<![0-9])\.(?![0-9])|[;!?]")
 
 
-def _requirement_sections(body_l: str):
+def iter_requirement_clauses(body_l: str):
     """Yields (clause, in_required_section) for every clause (line split
     further into sentences) in body_l, tracking which requirement/optional
-    heading — if any — the clause currently sits under."""
+    heading — if any — the clause currently sits under. Shared by every
+    check below AND by scoring.py's formal-qualification penalty — needs
+    db.strip_html()'s block-tag-to-newline behavior (2026-08-29) to see
+    bullet structure at all; body_l is expected to already have one
+    bullet/paragraph per line."""
     section = None
     for line in body_l.split("\n"):
         line = line.strip()
@@ -295,27 +338,82 @@ def _requirement_sections(body_l: str):
                 yield clause, section == "req"
 
 
-TRUCKFORERBEVIS_MENTION_RE = re.compile(r"truckfø")
+# Shared verb/softener vocabulary — used by every "is X actually a firm
+# requirement" check in this file (truckfør, English forklift certificate)
+# and imported by scoring.py for the formal-qualification/programming-
+# experience penalties. Widened 2026-08-29 with English equivalents
+# ("is required", "must have") — previously Norwegian-only, so an English
+# ad stating "Valid forklift certificate T1–T4 is required" under a
+# "Desired qualifications:" heading (itself an OPTIONAL heading) had no way
+# to override that default; an explicit hard verb in the clause itself must
+# always win regardless of which heading it sits under.
+REQUIREMENT_VERB_RE = re.compile(
+    r"må ha|må kunne|\bkrav\b|kreves|krever|krevast|\btrenger\b|"
+    r"\bhar du\b|\bdu har\b|\bsom har\b|\bgyldig|innehar|"
+    r"\bis required\b|\bare required\b|\bmust have\b|\bmust hold\b|\brequired\b"
+)
 # A softener anywhere in the clause wins even under a requirements heading
 # ("Kvalifikasjoner: ... truckførerbevis er en fordel, men ikke et krav" —
 # measured live, ~55 of 118 truckfør-mentioning ads use exactly this shape).
-# Scoped OUTSIDE parentheses: "Truckførerbevis T8 (T8.4 er en fordel men
-# ikke et krav)" means T8 itself IS required — only the more advanced T8.4
-# sub-class is optional (live case: CargoNet, user-flagged 2026-08-29).
-TRUCKFORERBEVIS_SOFT_RE = re.compile(
+OPTIONAL_MARKER_RE = re.compile(
     r"gjerne|ønskelig|ønskjeleg|fordel|fordelaktig|pluss\b|positivt|"
     r"ikke\s+(?:\w+\s+)?krav|ikkje\s+(?:\w+\s+)?krav|ikke en forutsetning|"
     r"ikke noe must|bør ha|manglar du|mangler du|ikke nødvendig|kjekt om|"
-    r"et ønske"
+    r"et ønske|kan veie opp|kan kompensere|"
+    r"eller tilsvarende|eller tilsvarande|eller liknende|eller lignende|"
+    r"eller realkompetanse|eller relevant erfaring|eller erfaring|eller lang erfaring|"
+    r"an advantage|considered an advantage|is a plus|preferred\b|or equivalent|"
+    r"nice to have|not required|desirable|training (?:can|will) be provided|we will train"
 )
-TRUCKFORERBEVIS_HARD_REQUIREMENT_RE = re.compile(
-    r"må ha|må kunne|\bkrav\b|kreves|krever|krevast|\btrenger\b|"
-    r"\bhar du\b|\bdu har\b|\bsom har\b|\bgyldig|innehar"
-)
+_PARENS_RE = re.compile(r"\([^)]*\)")
+
+
+def _has_unmet_requirement(mention_re, clauses, training_re=None, title_l=None):
+    """Shared verdict logic for "does `mention_re` show up as a firm, unmet
+    requirement anywhere in `clauses`, with the title as a structural
+    fallback". `training_re`, if given, cancels a mention the same way the
+    truckførerbevis training-offered override works — checked in the
+    mention's own clause and the next one (a trailing clause, in every real
+    example seen: "...er ønskelig. opplæring kan gis")."""
+    mention_indices = [i for i, (c, _) in enumerate(clauses) if mention_re.search(c)]
+
+    def _training_offered_near(i: int) -> bool:
+        if training_re is None:
+            return False
+        nxt = clauses[i + 1][0] if i + 1 < len(clauses) else ""
+        return bool(training_re.search(clauses[i][0]) or training_re.search(nxt))
+
+    for i in mention_indices:
+        clause, in_required_section = clauses[i]
+        if _training_offered_near(i):
+            continue
+        # Scoped OUTSIDE parentheses: "Truckførerbevis T8 (T8.4 er en
+        # fordel men ikke et krav)" means T8 itself IS required — only the
+        # more advanced T8.4 sub-class is optional (live case: CargoNet,
+        # user-flagged 2026-08-29).
+        if OPTIONAL_MARKER_RE.search(_PARENS_RE.sub(" ", clause)):
+            continue
+        if REQUIREMENT_VERB_RE.search(clause) or in_required_section:
+            return True
+
+    if title_l is not None and mention_re.search(title_l):
+        # Training-offered override only counts when it sits near an actual
+        # mention in the body (same adjacency rule as above) — a training
+        # sentence anywhere else in the body must not save a title-driven
+        # block either (2026-08-26 bug class: CargoNet's "T4 erfaring" case,
+        # an unrelated "Opplæring vil bli gitt" onboarding sentence several
+        # clauses away otherwise silently overrode a real requirement).
+        if any(_training_offered_near(i) for i in mention_indices):
+            return False
+        return True
+
+    return False
+
+
+TRUCKFORERBEVIS_MENTION_RE = re.compile(r"truckfø")
 TRUCKFORERBEVIS_TRAINING_OFFERED_RE = re.compile(
     r"opplæring (vil bli gitt|kan gis|gis)|vi lærer deg opp|får opplæring|læres opp"
 )
-_PARENS_RE = re.compile(r"\([^)]*\)")
 
 
 def _has_unmet_truckforerbevis_requirement(title_l: str, body_l: str) -> bool:
@@ -334,39 +432,26 @@ def _has_unmet_truckforerbevis_requirement(title_l: str, body_l: str) -> bool:
     2026-08-29): old rule blocked 21, this one blocks 51, with exactly 1
     acceptable regression (an ambiguous "krav" heading whose own bullet list
     mixed hard and soft items in a shape too tangled to split further)."""
-    clauses = list(_requirement_sections(body_l))
-    mention_indices = [i for i, (c, _) in enumerate(clauses) if "truckfø" in c]
+    clauses = list(iter_requirement_clauses(body_l))
+    return _has_unmet_requirement(
+        TRUCKFORERBEVIS_MENTION_RE, clauses,
+        training_re=TRUCKFORERBEVIS_TRAINING_OFFERED_RE, title_l=title_l,
+    )
 
-    def _training_offered_near(i: int) -> bool:
-        nxt = clauses[i + 1][0] if i + 1 < len(clauses) else ""
-        return bool(
-            TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(clauses[i][0])
-            or TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(nxt)
-        )
 
-    for i in mention_indices:
-        clause, in_required_section = clauses[i]
-        if _training_offered_near(i):
-            continue
-        if TRUCKFORERBEVIS_SOFT_RE.search(_PARENS_RE.sub(" ", clause)):
-            continue
-        if TRUCKFORERBEVIS_HARD_REQUIREMENT_RE.search(clause) or in_required_section:
-            return True
+# English equivalent of the truckførerbevis check, added 2026-08-29 (live
+# case, user-flagged: "Warehouse workers with forklift certificate" — NAV's
+# feed carries plenty of English-language ads from staffing agencies).
+# Norwegian "truckførerbevis" and English "forklift certificate" are kept as
+# two separate mention patterns rather than merged into one regex — the
+# words share no substring, and a merged pattern would just be harder to
+# read for no benefit.
+FORKLIFT_CERT_MENTION_RE = re.compile(r"forklift (?:licen[cs]e|certificate|cert\b)")
 
-    if TRUCKFORERBEVIS_MENTION_RE.search(title_l):
-        # Training-offered override only counts when it sits near an actual
-        # truckfø mention in the body (same adjacency rule as above) — a
-        # training sentence anywhere else in the body must not save a
-        # title-driven block either. This is the same class of bug the
-        # 2026-08-26 fix targeted for body mentions (CargoNet's "T4
-        # erfaring" case: an unrelated "Opplæring vil bli gitt" onboarding
-        # sentence, several clauses away from the actual requirement,
-        # otherwise silently overrides it).
-        if any(_training_offered_near(i) for i in mention_indices):
-            return False
-        return True
 
-    return False
+def _has_unmet_forklift_certificate_requirement(title_l: str, body_l: str) -> bool:
+    clauses = list(iter_requirement_clauses(body_l))
+    return _has_unmet_requirement(FORKLIFT_CERT_MENTION_RE, clauses, title_l=title_l)
 
 
 # Below this and outside Vestland, relocating doesn't cover rent — see
@@ -413,5 +498,8 @@ def check_exclusion(
 
     if _has_unmet_truckforerbevis_requirement(title_l, body_l):
         return True, "Вимагає truckførerbevis без навчання на місці — поки не отримуємо"
+
+    if _has_unmet_forklift_certificate_requirement(title_l, body_l):
+        return True, "Вимагає forklift certificate без навчання на місці — поки не отримуємо"
 
     return False, None

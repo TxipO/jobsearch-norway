@@ -12,6 +12,7 @@ import json
 import re
 
 from db import strip_html
+from hard_blocks import OPTIONAL_MARKER_RE, REQUIREMENT_VERB_RE, iter_requirement_clauses
 
 # --- Track A: IT-support / helpdesk / servicedesk --------------------------
 # Backed by 3+ years of real experience (Verna, PUMB, freelance repair).
@@ -289,6 +290,25 @@ TIER_1_MUNICIPALS = {
     "VIK", "HØYANGER", "ÅRDAL",
 }
 
+# "Major job market" tier — user-requested 2026-08-29: Bergen should score
+# the same as Oslo, both are the two biggest job markets in the country and
+# worth relocating for even though neither is the Sogndal/Sogn home region
+# (TIER_1, still the highest bonus — no relocation needed there at all).
+# Oslo-region is checked at COUNTY level (matches how the user phrased it —
+# "Акерсхус, Бускеруд, Ліллестрьом" are fylke/kommune names covering the
+# whole commute belt, and Oslo's own county is small enough that the fylke
+# itself is a reasonable proxy). Bergen-region is checked at MUNICIPAL
+# level instead, like TIER_1 — Vestland fylke is far too broad to treat
+# uniformly (it already gets its own smaller VESTLAND_BONUS below for
+# everywhere else in the fylke, mostly remote fjord country nowhere near
+# Bergen's actual job market).
+TIER_2_COUNTIES = {"OSLO", "AKERSHUS", "BUSKERUD"}
+TIER_2_MUNICIPALS = {
+    "BERGEN", "ASKØY", "ØYGARDEN", "ALVER", "OSTERØY", "VAKSDAL",
+    "SAMNANGER", "BJØRNAFJORDEN", "AUSTEVOLL",
+}
+TIER_2_BONUS = 10
+
 # Relocation-worthiness penalty — user-requested 2026-08-29: within
 # TIER_1_MUNICIPALS (or remote — no physical move needed either way), a
 # short/part-time contract is a fine way to earn locally. Beyond that, it's
@@ -337,6 +357,70 @@ DEGREE_REQUIRED_PATTERNS = [
     # positives in the sample.
     r"kvalifisert:?\s{0,15}(master|bachelor)",
 ]
+
+# Section-aware formal-qualification / programming-experience penalties —
+# added 2026-08-29, round 2 of the flagged-queue audit. DEGREE_REQUIRED_PATTERNS
+# above only catches a requirement phrased directly as "bachelorgrad
+# kreves" — misses the far more common shape where the diploma/fagbrev
+# sits as its own bullet under a "Kvalifikasjoner:"/"Requirements" heading
+# with no verb of its own (same structural gap the truckførerbevis block
+# was rewritten for). Reuses hard_blocks.py's shared clause/section
+# machinery rather than reimplementing it (see that module's
+# iter_requirement_clauses/REQUIREMENT_VERB_RE/OPTIONAL_MARKER_RE). A
+# scoring PENALTY, not a hard_blocks.py exclusion — user-requested
+# 2026-08-29: unlike truckførerbevis/forklift (a hard yes/no), a stated
+# degree requirement is softer terrain (the user's own bachelor's, or
+# relevant self-taught experience, can sometimes argue around it), so it
+# demotes rather than hides.
+FORMAL_QUALIFICATION_RE = re.compile(
+    r"\bfagbrev\b|\bsvennebrev\b|\bfagskole\b|trade certificate|"
+    r"competency certificate|vocational (?:diploma|certificate)|"
+    r"\bbachelor|\bmastergrad|\bmaster i\b|høyere utdanning|høgare utdanning|"
+    r"\bsivilingeniør|bachelor'?s degree|master'?s degree|\bbsc\b|\bmsc\b"
+)
+# The user's own bachelor's is in cybersecurity (recognized in Norway — see
+# jobsearch-norway-profile memory) — a qualification requirement naming the
+# IT field is one the user can actually point to, so it must not be
+# penalized even though it's still a "formal qualification" in shape. Live
+# case: "IT-driftstekniker" (59) explicitly lists "fagbrev, fagskole eller
+# annen relevant høyere IT-utdanning" — the IT alternative IS what the user
+# has.
+FORMAL_QUALIFICATION_IT_FIELD_RE = re.compile(
+    r"\bit\b|informatikk|datateknikk|datateknologi|informasjonsteknologi|"
+    r"\bcyber|informasjonssikkerhet|informasjonssystem|computer science|\bsoftware\b"
+)
+FORMAL_QUALIFICATION_PENALTY = -35
+
+# Catches roles that don't title themselves as a developer (dev_title_penalty
+# above wouldn't fire) but still explicitly want hands-on coding experience —
+# live case: "IT-rådgiver/IT-konsulent" (digital archivist role, re-flagged
+# 2026-08-29) wants "erfaring med programmering og skripting (f.eks. Python,
+# C#, JavaScript)" as a listed qualification.
+PROGRAMMING_EXPERIENCE_RE = re.compile(
+    r"erfaring med programmering|erfaring med (?:å )?(?:kode|skripting)|"
+    r"programming experience|experience with programming"
+)
+PROGRAMMING_EXPERIENCE_PENALTY = -25
+
+
+def _has_unmet_formal_qualification(text: str) -> bool:
+    for clause, in_required_section in iter_requirement_clauses(text):
+        if not FORMAL_QUALIFICATION_RE.search(clause):
+            continue
+        if FORMAL_QUALIFICATION_IT_FIELD_RE.search(clause):
+            continue
+        if OPTIONAL_MARKER_RE.search(clause):
+            continue
+        if REQUIREMENT_VERB_RE.search(clause) or in_required_section:
+            return True
+    return False
+
+
+def _has_programming_experience_requirement(text: str) -> bool:
+    for clause, _ in iter_requirement_clauses(text):
+        if PROGRAMMING_EXPERIENCE_RE.search(clause) and not OPTIONAL_MARKER_RE.search(clause):
+            return True
+    return False
 
 
 def _count_keyword_hits(text: str, keywords: list[str]) -> tuple[int, list[str]]:
@@ -396,6 +480,13 @@ def score_vacancy(
     breakdown["language_bonus"] = {"points": language_score, "language": language}
 
     it_hits, it_kw = _count_keyword_hits(text, IT_SUPPORT_KEYWORDS)
+    # "feilsøking" (troubleshooting) alone is too generic a word to mean
+    # IT-support — measured live 2026-08-29: 139 active ads matched it as
+    # the ONLY IT-support keyword present, almost all mechanical/industrial
+    # titles (Testingeniør, Industrimekaniker, boat/train mechanics...).
+    # Only counts when at least one other IT-support keyword is also there.
+    if it_kw == ["feilsøking"]:
+        it_hits, it_kw = 0, []
     it_score = min(it_hits * 8, 40)
     breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}
 
@@ -458,6 +549,9 @@ def score_vacancy(
     if municipal_u in TIER_1_MUNICIPALS:
         location_score = 15
         location_reason = f"kommune {municipal}: Sogndal/Sogn-regionen"
+    elif county_u in TIER_2_COUNTIES or municipal_u in TIER_2_MUNICIPALS:
+        location_score = TIER_2_BONUS
+        location_reason = f"{municipal or county}: Oslo/Bergen-regionen"
     elif county_u == "VESTLAND":
         location_score = 7
         location_reason = "fylke Vestland"
@@ -518,6 +612,18 @@ def score_vacancy(
     breakdown["relocation_worthiness_penalty"] = {
         "points": relocation_penalty,
         "matched": {"low_extent": low_extent, "short_vikariat": short_vikariat},
+    }
+
+    requires_formal_qualification = _has_unmet_formal_qualification(text)
+    formal_qualification_penalty = FORMAL_QUALIFICATION_PENALTY if requires_formal_qualification else 0
+    breakdown["formal_qualification_penalty"] = {
+        "points": formal_qualification_penalty, "matched": requires_formal_qualification,
+    }
+
+    requires_programming_experience = _has_programming_experience_requirement(text)
+    programming_experience_penalty = PROGRAMMING_EXPERIENCE_PENALTY if requires_programming_experience else 0
+    breakdown["programming_experience_penalty"] = {
+        "points": programming_experience_penalty, "matched": requires_programming_experience,
     }
 
     base = 10

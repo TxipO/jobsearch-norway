@@ -184,6 +184,8 @@ BREAKDOWN_LABELS = {
     "phone_support_penalty": "Телефонний канал підтримки",
     "dev_title_penalty": "Вакансія розробника (за назвою)",
     "relocation_worthiness_penalty": "Переїзд не виправданий (частина ставки / короткий vikariat)",
+    "formal_qualification_penalty": "Формальна кваліфікація (fagbrev/диплом), не IT-профіль",
+    "programming_experience_penalty": "Вимагає досвід програмування",
 }
 BREAKDOWN_ORDER = list(BREAKDOWN_LABELS.keys())
 
