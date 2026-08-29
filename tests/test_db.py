@@ -630,3 +630,22 @@ def test_rows_needing_full_description_retries_after_cooldown(tmp_path):
 
     needing = {r["uuid"] for r in db.rows_needing_full_description(conn, source="jobbnorge", retry_after_hours=24)}
     assert needing == {"tried-long-ago"}
+
+
+def test_strip_html_preserves_block_boundaries_as_newlines():
+    """2026-08-29: <li>/<p>/<br> used to be dropped like any other tag,
+    flattening a bullet list into one run-on string — a softener from one
+    bullet could then bleed into an unrelated neighboring bullet. Block
+    tags now become a newline so hard_blocks.py's clause/section-aware
+    checks can tell bullets apart."""
+    html = "<ul><li>Krav A</li><li>Krav B</li></ul><p>Ny seksjon</p>"
+    result = db.strip_html(html)
+    assert "\n" in result
+    lines = [l.strip() for l in result.split("\n") if l.strip()]
+    assert lines == ["Krav A", "Krav B", "Ny seksjon"]
+
+
+def test_strip_html_decodes_entities():
+    """2026-08-29: "4&#43; years" never matched a plain "4+ years" pattern
+    — found in 42% of the live corpus (4503/10768 active ads)."""
+    assert db.strip_html("4&#43; years &amp; counting") == "4+ years & counting"

@@ -246,70 +246,123 @@ EU_PASSPORT_REQUIREMENT_RE = re.compile(r"eu[\s-]?passport", re.I)
 # itself offers to train the hire on the job, which the user is fine with
 # ("якщо на місці вже запропонують, то я не проти"). This is the first
 # *conditional* body-level block in this file (every other check here is
-# unconditional) — narrow on purpose: measured against the live corpus
-# (2026-08-26, ~112 truckfør*-vacancies), the overwhelming majority use
-# soft/optional phrasing ("er en fordel, men ikke et krav", "gjerne",
-# "ønskelig", "bør ha") that must NOT be blocked, and only a handful use an
-# unambiguous hard-requirement verb ("må ha truckførerbevis", "dette er et
-# krav", "kreves"). Erring toward under-blocking the ambiguous middle
-# ("at du har X" bullet lists with no visible verb) is deliberate — same
-# "don't hide what we can't confidently judge" principle as the low-extent
-# check below. Revisit/remove entirely if the user gets the certificate
+# unconditional). Revisit/remove entirely if the user gets the certificate
 # independently — see jobsearch-norway-profile memory for exactly how this
-# behaved before this change (GENERAL_ENTRY_KEYWORDS-only, no block).
+# behaved before the 2026-08-26 block was added (GENERAL_ENTRY_KEYWORDS-
+# only, no block).
+# --- Clause/section-aware requirement reading -------------------------------
+# Norwegian ads structure requirements as a HEADING ("Kvalifikasjoner:")
+# followed by bullet items, not one sentence — the verb that makes something
+# mandatory ("må ha", "krav") often lives in the heading or a sibling bullet,
+# not the same clause as the certificate name itself. A per-mention
+# character-distance window (the pre-2026-08-29 approach) can't see that
+# structure at all. This needs db.strip_html()'s block-tag-to-newline
+# behavior (2026-08-29) to work — body_l here is expected to already have
+# one bullet/paragraph per line.
+REQUIREMENT_HEADING_RE = re.compile(
+    r"^(?:kvalifikasjoner|kvalifikasjonar|kvalifikasjonskrav|krav til søker|"
+    r"krav til deg|kompetansekrav|formelle krav|vi krever|vi krev|"
+    r"du må ha|den som ansettes må ha|den som tilsettes må ha|"
+    r"dette må du ha|må du ha|krav|hvem ser vi etter|hvem er du|"
+    r"vi ser etter deg som|vi søker deg som|om deg)\s*[:–-]*$"
+)
+OPTIONAL_HEADING_RE = re.compile(
+    r"^(?:ønskede kvalifikasjoner|ønskelige kvalifikasjoner|ønskelig|"
+    r"ønsket kompetanse|fordelaktig|det er en fordel|vi ser gjerne|"
+    r"personlige egenskaper|vi tilbyr|vi kan tilby|arbeidsoppgaver|"
+    r"om stillingen|andre ønsker|fordeler)\s*[:–-]*$"
+)
+_CLAUSE_SPLIT_RE = re.compile(r"(?<![0-9])\.(?![0-9])|[;!?]")
+
+
+def _requirement_sections(body_l: str):
+    """Yields (clause, in_required_section) for every clause (line split
+    further into sentences) in body_l, tracking which requirement/optional
+    heading — if any — the clause currently sits under."""
+    section = None
+    for line in body_l.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if REQUIREMENT_HEADING_RE.match(line):
+            section = "req"
+            continue
+        if OPTIONAL_HEADING_RE.match(line):
+            section = "opt"
+            continue
+        for clause in (p.strip() for p in _CLAUSE_SPLIT_RE.split(line)):
+            if clause:
+                yield clause, section == "req"
+
+
 TRUCKFORERBEVIS_MENTION_RE = re.compile(r"truckfø")
+# A softener anywhere in the clause wins even under a requirements heading
+# ("Kvalifikasjoner: ... truckførerbevis er en fordel, men ikke et krav" —
+# measured live, ~55 of 118 truckfør-mentioning ads use exactly this shape).
+# Scoped OUTSIDE parentheses: "Truckførerbevis T8 (T8.4 er en fordel men
+# ikke et krav)" means T8 itself IS required — only the more advanced T8.4
+# sub-class is optional (live case: CargoNet, user-flagged 2026-08-29).
+TRUCKFORERBEVIS_SOFT_RE = re.compile(
+    r"gjerne|ønskelig|ønskjeleg|fordel|fordelaktig|pluss\b|positivt|"
+    r"ikke\s+(?:\w+\s+)?krav|ikkje\s+(?:\w+\s+)?krav|ikke en forutsetning|"
+    r"ikke noe must|bør ha|manglar du|mangler du|ikke nødvendig|kjekt om|"
+    r"et ønske"
+)
 TRUCKFORERBEVIS_HARD_REQUIREMENT_RE = re.compile(
-    r"må ha|må kunne|\ber et krav\b|dette er et krav|kreves|krever"
+    r"må ha|må kunne|\bkrav\b|kreves|krever|krevast|\btrenger\b|"
+    r"\bhar du\b|\bdu har\b|\bsom har\b|\bgyldig|innehar"
 )
 TRUCKFORERBEVIS_TRAINING_OFFERED_RE = re.compile(
     r"opplæring (vil bli gitt|kan gis|gis)|vi lærer deg opp|får opplæring|læres opp"
 )
+_PARENS_RE = re.compile(r"\([^)]*\)")
 
 
 def _has_unmet_truckforerbevis_requirement(title_l: str, body_l: str) -> bool:
     """True when truckførerbevis reads as a firm requirement with no
     on-the-job training offered *for that certificate specifically*.
 
-    Live bug found 2026-08-26 (user spot-checked the "training offered"
-    list and couldn't find any training mention on 2 of the first 3): the
-    training-offered check originally searched the WHOLE body, so a
-    generic "Full opplæring vil bli gitt" onboarding sentence — unrelated
-    to truckførerbevis, often nowhere near it — silently overrode a real
-    requirement. Live case: "Truckfører med T4 erfaring" lists
-    "Truckførerbevis T1–T4" under Kvalifikasjoner (candidates must already
-    hold it), then a generic training sentence 276 characters later talks
-    about general onboarding, not the certificate — the old code let it
-    through anyway. Fixed by requiring the training phrase to sit within
-    ~50 chars of a truckfør mention, same window as the hard-requirement
-    check — measured against the one confirmed on-topic live case
-    ("truckførerbevis klasse t1 er ønskelig. opplæring kan gis", 39 chars
-    apart) vs. the false-override case above (276 chars), 50 cleanly
-    separates them.
+    Rewritten 2026-08-29 (user spot-checked the queue again and found the
+    2026-08-26 per-mention-window version still missed real requirements
+    like CargoNet's — "Kvalifikasjoner: Lasting/lossing ... (truckførerbevis
+    T8) ... Truckførerbevis T8 (T8.4 er en fordel men ikke et krav)": the
+    mandatory framing is the "Kvalifikasjoner:" HEADING two bullets above,
+    the certificate's own clause has no verb at all. Section-aware analysis
+    (this version) catches this — a bullet under a requirements heading with
+    no softener of its own counts as required even without its own verb.
+    Measured against the full live corpus (118 truckfør-mentioning ads,
+    2026-08-29): old rule blocked 21, this one blocks 51, with exactly 1
+    acceptable regression (an ambiguous "krav" heading whose own bullet list
+    mixed hard and soft items in a shape too tangled to split further)."""
+    clauses = list(_requirement_sections(body_l))
+    mention_indices = [i for i, (c, _) in enumerate(clauses) if "truckfø" in c]
 
-    Checks the title as a role-defining term ("Truckfører søkes")
-    unconditionally — that role structurally needs the certificate to do
-    the job at all — but a body mention with training offered nearby still
-    overrides even a title-driven block."""
-    body_mentions = list(TRUCKFORERBEVIS_MENTION_RE.finditer(body_l))
+    def _training_offered_near(i: int) -> bool:
+        nxt = clauses[i + 1][0] if i + 1 < len(clauses) else ""
+        return bool(
+            TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(clauses[i][0])
+            or TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(nxt)
+        )
 
-    def _training_offered_near(pos: int) -> bool:
-        # Asymmetric: training phrasing is a trailing clause in every real
-        # example seen ("...er ønskelig. opplæring kan gis"), so the window
-        # extends further forward than back — 90 chars comfortably fits a
-        # full "opplæring vil bli gitt"-length clause after "truckfø" (a
-        # 50/50 symmetric window clipped "gitt" off a real phrase in
-        # testing) while staying nowhere near the 276-char distance of the
-        # unrelated onboarding sentence this fix excludes.
-        window = body_l[max(0, pos - 50):pos + 90]
-        return bool(TRUCKFORERBEVIS_TRAINING_OFFERED_RE.search(window))
-
-    for m in body_mentions:
-        window = body_l[max(0, m.start() - 50):m.end() + 50]
-        if TRUCKFORERBEVIS_HARD_REQUIREMENT_RE.search(window) and not _training_offered_near(m.start()):
+    for i in mention_indices:
+        clause, in_required_section = clauses[i]
+        if _training_offered_near(i):
+            continue
+        if TRUCKFORERBEVIS_SOFT_RE.search(_PARENS_RE.sub(" ", clause)):
+            continue
+        if TRUCKFORERBEVIS_HARD_REQUIREMENT_RE.search(clause) or in_required_section:
             return True
 
     if TRUCKFORERBEVIS_MENTION_RE.search(title_l):
-        if any(_training_offered_near(m.start()) for m in body_mentions):
+        # Training-offered override only counts when it sits near an actual
+        # truckfø mention in the body (same adjacency rule as above) — a
+        # training sentence anywhere else in the body must not save a
+        # title-driven block either. This is the same class of bug the
+        # 2026-08-26 fix targeted for body mentions (CargoNet's "T4
+        # erfaring" case: an unrelated "Opplæring vil bli gitt" onboarding
+        # sentence, several clauses away from the actual requirement,
+        # otherwise silently overrides it).
+        if any(_training_offered_near(i) for i in mention_indices):
             return False
         return True
 
