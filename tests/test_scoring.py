@@ -548,3 +548,41 @@ def test_location_bonus_tier1_still_beats_tier2():
     _, bd_home = _score("Test", "Vi søker deg.", municipal="Sogndal", county="Vestland")
     _, bd_oslo = _score("Test", "Vi søker deg.", municipal="Oslo", county="Oslo")
     assert bd_home["location_bonus"]["points"] > bd_oslo["location_bonus"]["points"]
+
+
+def test_car_required_hard_requirement_penalized():
+    _, bd = _score(
+        "Renholder",
+        "<p>Kvalifikasjoner</p><ul><li>Du må ha førerkort klasse B</li></ul>",
+    )
+    assert bd["car_penalty"]["points"] < 0
+
+
+def test_car_required_bullet_under_requirements_heading_penalized():
+    """No explicit verb on the item itself, but it sits under a
+    requirements heading — same shape as the truckførerbevis fix this
+    reuses the machinery from."""
+    _, bd = _score(
+        "Hjemmehjelp",
+        "<p>Kvalifikasjoner</p><ul><li>Førerkort klasse B</li></ul>",
+    )
+    assert bd["car_penalty"]["points"] < 0
+
+
+def test_car_required_soft_mention_not_penalized():
+    """2026-08-30 live bug (/fullreview deep): the old bare-keyword check
+    penalized this identically to a hard requirement — measured live, 280
+    of 1425 non-excluded "førerkort" matches read this way."""
+    _, bd = _score(
+        "Kjøkkenassistent",
+        "Førerkort klasse B er en fordel, men ikke et krav.",
+    )
+    assert bd["car_penalty"]["points"] == 0
+
+
+def test_car_required_negated_mention_not_penalized():
+    _, bd = _score(
+        "Butikkmedarbeider",
+        "Du trenger ikke førerkort for denne stillingen.",
+    )
+    assert bd["car_penalty"]["points"] == 0

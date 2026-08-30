@@ -167,6 +167,11 @@ OCCUPATION_CATEGORIES = [
     "IT", "Kontor og økonomi", "Kultur og kreative yrker", "Natur og miljø",
     "Reiseliv og mat", "Salg og service", "Sikkerhet og beredskap",
     "Transport og lager", "Utdanning",
+    # Found 2026-08-30 (/fullreview deep, Stage 4) — NAV's own catch-all for
+    # postings it couldn't classify. Missing from this fixed copy since
+    # whenever it was first written; 3 live active vacancies carry it and
+    # were unreachable via this filter dropdown until now.
+    "Uoppgitt/ ikke identifiserbare",
 ]
 templates.env.globals["OCCUPATION_CATEGORIES"] = OCCUPATION_CATEGORIES
 
