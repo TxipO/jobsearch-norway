@@ -250,6 +250,22 @@ traces to a real incident in this project, not a hypothetical.
    `iter_requirement_clauses`/`REQUIREMENT_VERB_RE`/`OPTIONAL_MARKER_RE`
    machinery (already built for truckførerbevis/forklift) instead of a
    bare substring check — don't reimplement the distinction per keyword.
+10. **A manually-crafted duplicate of script-generated content, used
+    without checking it postdates its source.** Any file that exists
+    outside a generator's own output path but claims to represent the same
+    facts (a hand-designed CV export sitting in a personal folder, a copied
+    snippet, a cached render) has no forced-resync mechanism — it goes
+    stale silently the moment the source data changes, and nothing errors.
+    **Live bug, 2026-08-30:** a hand-designed, Chrome-rendered CV PDF
+    living outside the repo (`default_apply_cv_path`) still held Verna's
+    pre-2026-08-07 dates (overlapping FUIB/PUMB) when it was set as the
+    default attachment for external-form applications on 2026-08-27 — its
+    mtime (29.07) predated the fix and nobody checked. Sent to at least one
+    real employer before caught. Before trusting any such file as a
+    default/source of fact, compare its mtime against the last edit to the
+    data it's supposed to represent (here, `profile_data.py`) — if there's
+    no cheap way to verify staleness, prefer pointing at the generator's
+    own output instead of a hand-made copy.
 
 ---
 
