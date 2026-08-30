@@ -24,7 +24,7 @@ user: "прибери цю функцію" — the old auto-copy kept resurfacin
 generic CV). Every CV in `profile/generated/<uuid>/` comes from this skill,
 placed deliberately, or doesn't exist yet.
 
-**This "no default" rule is scoped to this skill's pipeline** (`profile/generated/<uuid>/cv.*`, which grounds the søknad-generation prompt). It does not cover attaching a CV file to an actual external application form (a browser-automation submit, LinkedIn Easy Apply, etc.) — there, per the user's 2026-08-27 instruction, the default IS a specific file: `C:\Users\doter\OneDrive\Рабочий стол\jobba\CV [user] - NO IT-support.pdf` (the designed Chrome-rendered one), unless the form itself auto-parses the CV to fill fields — then use `profile/generated/master-cv-no.pdf` instead, since a plain-text PDF parses more reliably than the designed layout. See jobsearch-cv-soknad-rules memory.
+**This "no default" rule is scoped to this skill's pipeline** (`profile/generated/<uuid>/cv.*`, which grounds the søknad-generation prompt). It does not cover attaching a CV file to an actual external application form (a browser-automation submit, LinkedIn Easy Apply, etc.) — there, per the user's 2026-08-27 instruction, the default IS a specific file: `profile/personal.json`'s `default_apply_cv_path` field (the designed Chrome-rendered one — that file lives outside the repo, gitignored, since its filename embeds the user's real name), unless the form itself auto-parses the CV to fill fields — then use `profile/generated/master-cv-no.pdf` instead, since a plain-text PDF parses more reliably than the designed layout. See jobsearch-cv-soknad-rules memory.
 
 ## Steps
 
