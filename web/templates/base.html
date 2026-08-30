@@ -24,6 +24,7 @@
     <nav class="topnav">
       <a href="/" {{ 'aria-current="page" class="active"' | safe if request.url.path == "/" }}>Список</a>
       <a href="/kanban" {{ 'aria-current="page" class="active"' | safe if request.url.path == "/kanban" }}>Kanban</a>
+      <a href="/vacancy/add" {{ 'aria-current="page" class="active"' | safe if request.url.path == "/vacancy/add" }}>+ Додати</a>
     </nav>
     <form method="post" action="/score-profile" class="profile-toggle">
       <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">

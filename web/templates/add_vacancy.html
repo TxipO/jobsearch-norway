@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Додати вакансію — Jobsearch Norway{% endblock %}
+{% block content %}
+
+<a href="/" class="back-link">&larr; До списку</a>
+
+<h1>Додати вакансію вручну</h1>
+
+<form method="post" action="/vacancy/add" class="add-vacancy-form">
+  {% include "_add_vacancy_fields.html" %}
+  <button type="submit" class="apply-btn">Додати вакансію</button>
+</form>
+
+{% endblock %}

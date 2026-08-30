@@ -1,0 +1,57 @@
+<div id="add-vacancy-fields">
+  <div class="form-row">
+    <label for="f-link">Посилання (LinkedIn — можна автозаповнити; будь-яке інше — просто збережеться)</label>
+    <div class="linkedin-fetch-row">
+      <input type="url" id="f-link" name="link" value="{{ values.link if values else '' }}" placeholder="https://www.linkedin.com/jobs/view/...">
+      <button type="button" class="apply-btn"
+        hx-post="/vacancy/add/linkedin-preview"
+        hx-include="#f-link"
+        hx-target="#add-vacancy-fields"
+        hx-swap="outerHTML"
+      >Автозаповнити з LinkedIn</button>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="backup-warning">{{ error }}</div>
+  {% endif %}
+
+  <div class="form-row">
+    <label for="f-title">Назва вакансії *</label>
+    <input type="text" id="f-title" name="title" value="{{ values.title if values else '' }}" required>
+  </div>
+
+  <div class="form-row">
+    <label for="f-business">Роботодавець</label>
+    <input type="text" id="f-business" name="business_name" value="{{ values.business_name if values else '' }}">
+  </div>
+
+  <div class="form-row">
+    <label for="f-municipal">Місто / муніципалітет</label>
+    <input type="text" id="f-municipal" name="municipal" value="{{ values.municipal if values else '' }}">
+  </div>
+
+  <div class="form-row">
+    <label for="f-county">Фюльке</label>
+    <input type="text" id="f-county" name="county" value="{{ values.county if values else '' }}">
+  </div>
+
+  <div class="form-row">
+    <label for="f-description">Опис (скопіюй з оригіналу — впливає на скоринг; LinkedIn не підтягує опис автоматично)</label>
+    <textarea id="f-description" name="description" rows="8">{{ values.description if values else '' }}</textarea>
+  </div>
+
+  <div class="form-row">
+    <label for="f-due">Дедлайн заявки (необов'язково, будь-який формат)</label>
+    <input type="text" id="f-due" name="application_due" value="{{ values.application_due if values else '' }}" placeholder="напр. 30.09.2026">
+  </div>
+
+  <div class="form-row">
+    <label for="f-status">Статус</label>
+    <select id="f-status" name="user_status">
+      {% for s in USER_STATUSES %}
+      <option value="{{ s }}" {{ "selected" if (values.user_status if values else "new") == s }}>{{ STATUS_LABELS[s] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
