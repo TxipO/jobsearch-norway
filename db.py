@@ -134,6 +134,14 @@ MIGRATIONS = [
     # sorting every dd.mm.yyyy-formatted NAV row as if it had no deadline
     # at all (pushed to the very end despite being a real near-term date).
     ("vacancies", "application_due_sort", "TEXT"),
+    # When user_status last became "applied" ("Відгукнувся") — drives the
+    # auto-ignore-after-silence feature (user-requested 2026-08-30, see
+    # auto_ignore_stale_applications). NULL for rows that were already
+    # "applied" before this column existed — no way to know when, and
+    # guessing would start a countdown from the wrong date, so those never
+    # auto-ignore (same "don't judge what we can't confidently know"
+    # convention as extent_percent elsewhere in this file).
+    ("vacancies", "applied_at", "TEXT"),
 ]
 
 
@@ -473,7 +481,17 @@ def mark_status(conn: sqlite3.Connection, uuid: str, status: str, title: str, bu
 def set_user_status(conn: sqlite3.Connection, uuid: str, user_status: str) -> None:
     if user_status not in USER_STATUSES:
         raise ValueError(f"Unknown user_status: {user_status!r}")
-    conn.execute("UPDATE vacancies SET user_status = ? WHERE uuid = ?", (user_status, uuid))
+    # Stamps/resets applied_at every time the status becomes "applied" —
+    # including re-applying after it had moved away — so the auto-ignore
+    # countdown (auto_ignore_stale_applications) always starts from the
+    # most recent actual application, not a stale earlier one.
+    if user_status == "applied":
+        conn.execute(
+            "UPDATE vacancies SET user_status = ?, applied_at = datetime('now') WHERE uuid = ?",
+            (user_status, uuid),
+        )
+    else:
+        conn.execute("UPDATE vacancies SET user_status = ? WHERE uuid = ?", (user_status, uuid))
     conn.commit()
 
 
@@ -833,3 +851,58 @@ def delete_expired_unreacted(conn: sqlite3.Connection) -> int:
     )
     conn.commit()
     return cur.rowcount
+
+
+# How long a silent "applied" application stays "applied" before it's
+# assumed the employer went quiet — user-requested 2026-08-30. Matches
+# "Ігнор"'s own established meaning in this project (see
+# jobsearch-status-semantics memory: "employer went silent", never "I
+# missed it"), so auto-transitioning into it after enough silence is
+# exactly what that status is for, not a stretch of it.
+AUTO_IGNORE_APPLIED_AFTER_MONTHS = 2
+
+
+def _auto_ignore_anchor_sql() -> str:
+    """The later of (a) when the status became "applied" and (b) the
+    listing's own application deadline, if any — SQLite's multi-arg max()
+    picks the larger per row. Rationale: if the deadline is still ahead
+    even after applying, the employer plausibly hasn't started reviewing
+    yet, so the silence clock shouldn't start until the deadline itself
+    passes; if the deadline already passed (or there wasn't one), the
+    clock starts at the application itself."""
+    return "max(date(applied_at), coalesce(application_due_sort, date(applied_at)))"
+
+
+def auto_ignore_stale_applications(conn: sqlite3.Connection) -> int:
+    """Moves "applied" ("Відгукнувся") rows to "ignored" once
+    AUTO_IGNORE_APPLIED_AFTER_MONTHS have passed since the later of
+    applying or the deadline — see AUTO_IGNORE_APPLIED_AFTER_MONTHS's own
+    comment. applied_at IS NULL (rows that were already "applied" before
+    this column existed — see that column's own MIGRATIONS comment) never
+    matches, on purpose: no recorded date to count from, so no guess."""
+    cur = conn.execute(
+        f"""
+        UPDATE vacancies
+        SET user_status = 'ignored'
+        WHERE user_status = 'applied'
+          AND applied_at IS NOT NULL
+          AND date('now') >= date({_auto_ignore_anchor_sql()}, '+{AUTO_IGNORE_APPLIED_AFTER_MONTHS} months')
+        """
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def get_auto_ignore_date(conn: sqlite3.Connection, applied_at: str | None, application_due_sort: str | None) -> str | None:
+    """YYYY-MM-DD the row will auto-ignore on if it's still "applied" then
+    — for display on the detail page. None when applied_at is unknown
+    (see auto_ignore_stale_applications). Computed via the same SQL
+    expression the actual UPDATE uses, so the displayed date can never
+    drift from what actually happens."""
+    if not applied_at:
+        return None
+    row = conn.execute(
+        f"SELECT date(max(date(?), coalesce(?, date(?))), '+{AUTO_IGNORE_APPLIED_AFTER_MONTHS} months')",
+        (applied_at, application_due_sort, applied_at),
+    ).fetchone()
+    return row[0] if row else None

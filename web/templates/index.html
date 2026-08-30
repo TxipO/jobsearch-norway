@@ -20,6 +20,9 @@
       <span class="sync-stat" title="Видалено з нашої бази остаточно">
         Прибрано з бази: <strong>{{ last_sync.deleted_inactive|default(0) }}</strong> неактивних + <strong>{{ last_sync.deleted_expired|default(0) }}</strong> протермінованих без реакції + <strong>{{ last_sync.deleted_archived|default(0) }}</strong> зі Смітника
       </span>
+      <span class="sync-stat" title="«Відгукнувся» без реакції 2+ місяці з дедлайну заявки або з дати подачі (що пізніше) — переведено в «Ігнор»">
+        Автоперехід в Ігнор: <strong>{{ last_sync.auto_ignored|default(0) }}</strong>
+      </span>
     </div>
     {% if last_sync.backup_failed %}
     <div class="backup-warning" title="{{ last_sync.backup_failed }}">

@@ -379,6 +379,7 @@ def trigger_sync():
     deleted_inactive = db.delete_inactive(conn)
     deleted_expired = db.delete_expired_unreacted(conn)
     deleted_archived = db.delete_archived(conn)
+    auto_ignored = db.auto_ignore_stale_applications(conn)
     new_high_score = (
         db.count_new_high_score(conn, prior_watermark_utc, NEW_HIGH_SCORE_THRESHOLD)
         if prior_watermark_utc else 0
@@ -395,6 +396,7 @@ def trigger_sync():
         "deleted_inactive": deleted_inactive,
         "deleted_expired": deleted_expired,
         "deleted_archived": deleted_archived,
+        "auto_ignored": auto_ignored,
         "new_high_score": new_high_score,
         "backup_failed": backup_failed,
     }
@@ -440,6 +442,10 @@ def vacancy_detail(request: Request, uuid: str):
     generated_docs = [name for name in GENERATED_DOC_NAMES if (doc_dir / name).exists()]
     reach = reachability.get_reachability(conn, vacancy["municipal"])
     lender = db.get_vacancy(conn, vacancy["description_borrowed_from"]) if vacancy["description_borrowed_from"] else None
+    auto_ignore_date = (
+        db.get_auto_ignore_date(conn, vacancy["applied_at"], vacancy["application_due_sort"])
+        if vacancy["user_status"] == "applied" else None
+    )
     return templates.TemplateResponse(
         request,
         "detail.html",
@@ -447,6 +453,7 @@ def vacancy_detail(request: Request, uuid: str):
             "v": vacancy, "description_html": description_html, "breakdown": breakdown,
             "generated_docs": generated_docs, "reach": reach, "lender": lender,
             "score_profile": score_profile, "display_score": display_score,
+            "auto_ignore_date": auto_ignore_date,
         },
     )
 
