@@ -456,10 +456,10 @@ def test_auto_ignore_stale_applications_ignores_other_statuses(tmp_path):
     assert conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'interesting-old'").fetchone()["user_status"] == "interesting"
 
 
-def test_auto_ignore_stale_applications_skips_missing_applied_at(tmp_path):
+def test_auto_ignore_stale_applications_skips_when_neither_date_known(tmp_path):
     """Rows that were already "applied" before the applied_at column
-    existed have no recorded date to count from — never guessed, never
-    auto-ignored, regardless of how old the row otherwise looks."""
+    existed AND have no known deadline either have no recorded date to
+    count from at all — never guessed, never auto-ignored."""
     conn = _make_conn(tmp_path)
     _insert_vacancy(conn, "no-timestamp")
     db.set_user_status(conn, "no-timestamp", "applied")
@@ -467,6 +467,30 @@ def test_auto_ignore_stale_applications_skips_missing_applied_at(tmp_path):
     conn.commit()
 
     assert db.auto_ignore_stale_applications(conn) == 0
+
+
+def test_auto_ignore_stale_applications_backfills_from_deadline_alone(tmp_path):
+    """User-requested 2026-08-30: a row that was already "applied" before
+    applied_at existed (so that date is unknown) still auto-ignores off
+    application_due_sort ALONE when a deadline is known — that's real
+    recorded data, not a guess, unlike applied_at itself."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "old-applied-with-deadline")
+    db.set_user_status(conn, "old-applied-with-deadline", "applied")
+    conn.execute(
+        "UPDATE vacancies SET applied_at = NULL, application_due_sort = date('now', '-3 months') "
+        "WHERE uuid = 'old-applied-with-deadline'"
+    )
+    conn.commit()
+
+    assert db.auto_ignore_stale_applications(conn) == 1
+    row = conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'old-applied-with-deadline'").fetchone()
+    assert row["user_status"] == "ignored"
+
+
+def test_get_auto_ignore_date_backfills_from_deadline_alone(tmp_path):
+    conn = _make_conn(tmp_path)
+    assert db.get_auto_ignore_date(conn, None, "2026-06-01") == "2026-08-01"
 
 
 def test_get_auto_ignore_date_prefers_later_deadline(tmp_path):
@@ -481,9 +505,9 @@ def test_get_auto_ignore_date_falls_back_to_applied_at(tmp_path):
     assert d == "2026-03-01"
 
 
-def test_get_auto_ignore_date_none_without_applied_at(tmp_path):
+def test_get_auto_ignore_date_none_when_neither_date_known(tmp_path):
     conn = _make_conn(tmp_path)
-    assert db.get_auto_ignore_date(conn, None, "2026-06-01") is None
+    assert db.get_auto_ignore_date(conn, None, None) is None
 
 
 def test_delete_archived_ignores_source_status(tmp_path):

@@ -138,9 +138,10 @@ MIGRATIONS = [
     # auto-ignore-after-silence feature (user-requested 2026-08-30, see
     # auto_ignore_stale_applications). NULL for rows that were already
     # "applied" before this column existed — no way to know when, and
-    # guessing would start a countdown from the wrong date, so those never
-    # auto-ignore (same "don't judge what we can't confidently know"
-    # convention as extent_percent elsewhere in this file).
+    # guessing would start a countdown from the wrong date. Those rows
+    # still auto-ignore off application_due_sort ALONE when a deadline is
+    # known (that's real recorded data, not a guess); only a row with
+    # neither date known is left alone entirely.
     ("vacancies", "applied_at", "TEXT"),
 ]
 
@@ -869,23 +870,33 @@ def _auto_ignore_anchor_sql() -> str:
     even after applying, the employer plausibly hasn't started reviewing
     yet, so the silence clock shouldn't start until the deadline itself
     passes; if the deadline already passed (or there wasn't one), the
-    clock starts at the application itself."""
-    return "max(date(applied_at), coalesce(application_due_sort, date(applied_at)))"
+    clock starts at the application itself.
+
+    Falls back to the deadline ALONE when applied_at is unknown (rows that
+    were already "applied" before that column existed) — user-requested
+    2026-08-30: the deadline is real, recorded data, not a guess, so it's
+    fine to anchor on it even with no known application date. Only when
+    BOTH are unknown does this genuinely have nothing to count from."""
+    return (
+        "case when applied_at is not null "
+        "then max(date(applied_at), coalesce(application_due_sort, date(applied_at))) "
+        "else application_due_sort end"
+    )
 
 
 def auto_ignore_stale_applications(conn: sqlite3.Connection) -> int:
     """Moves "applied" ("Відгукнувся") rows to "ignored" once
     AUTO_IGNORE_APPLIED_AFTER_MONTHS have passed since the later of
-    applying or the deadline — see AUTO_IGNORE_APPLIED_AFTER_MONTHS's own
-    comment. applied_at IS NULL (rows that were already "applied" before
-    this column existed — see that column's own MIGRATIONS comment) never
-    matches, on purpose: no recorded date to count from, so no guess."""
+    applying or the deadline — see AUTO_IGNORE_APPLIED_AFTER_MONTHS's and
+    _auto_ignore_anchor_sql's own comments. A row with neither applied_at
+    nor application_due_sort never matches, on purpose: no recorded date
+    to count from, so no guess."""
     cur = conn.execute(
         f"""
         UPDATE vacancies
         SET user_status = 'ignored'
         WHERE user_status = 'applied'
-          AND applied_at IS NOT NULL
+          AND (applied_at IS NOT NULL OR application_due_sort IS NOT NULL)
           AND date('now') >= date({_auto_ignore_anchor_sql()}, '+{AUTO_IGNORE_APPLIED_AFTER_MONTHS} months')
         """
     )
@@ -895,14 +906,18 @@ def auto_ignore_stale_applications(conn: sqlite3.Connection) -> int:
 
 def get_auto_ignore_date(conn: sqlite3.Connection, applied_at: str | None, application_due_sort: str | None) -> str | None:
     """YYYY-MM-DD the row will auto-ignore on if it's still "applied" then
-    — for display on the detail page. None when applied_at is unknown
-    (see auto_ignore_stale_applications). Computed via the same SQL
-    expression the actual UPDATE uses, so the displayed date can never
-    drift from what actually happens."""
-    if not applied_at:
+    — for display on the detail page. None when neither applied_at nor
+    application_due_sort is known (see auto_ignore_stale_applications).
+    Computed via the same anchor logic the actual UPDATE uses, so the
+    displayed date can never drift from what actually happens."""
+    if not applied_at and not application_due_sort:
         return None
+    anchor = (
+        f"max(date(?), coalesce(?, date(?)))" if applied_at
+        else "?"
+    )
+    params = (applied_at, application_due_sort, applied_at) if applied_at else (application_due_sort,)
     row = conn.execute(
-        f"SELECT date(max(date(?), coalesce(?, date(?))), '+{AUTO_IGNORE_APPLIED_AFTER_MONTHS} months')",
-        (applied_at, application_due_sort, applied_at),
+        f"SELECT date({anchor}, '+{AUTO_IGNORE_APPLIED_AFTER_MONTHS} months')", params,
     ).fetchone()
     return row[0] if row else None
