@@ -50,6 +50,11 @@
     {% if v.extent %}<div><strong>Обсяг:</strong> {{ v.extent | translate_value }}{% if v.extent_percent %} (<span class="num">{{ v.extent_percent }}%</span>){% endif %}</div>{% endif %}
     {% if v.sector %}<div><strong>Сектор:</strong> {{ v.sector | translate_value }}</div>{% endif %}
     {% if v.salary_text %}<div><strong>Зарплата:</strong> <span class="salary-tag num">{{ v.salary_text }}</span></div>{% endif %}
+    {% if auto_ignore_date %}
+    <div title="Якщо статус лишиться «Відгукнувся», автоматично перейде в «Ігнор» цього дня — 2 місяці з дедлайну заявки або з дати подачі (що пізніше)">
+      <strong>Автоперехід в «Ігнор»:</strong> <span class="num">{{ auto_ignore_date | format_due }}</span>
+    </div>
+    {% endif %}
     {% if reach and not reach.error %}
     <div><strong>Громадський транспорт з дому:</strong> <span class="num">{{ reach.duration_min | format_duration_min }}</span> ({{ reach.modes | join(", ") }})</div>
     {% elif reach and reach.error == "no_route" %}

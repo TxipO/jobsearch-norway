@@ -387,6 +387,105 @@ def test_delete_expired_unreacted_respects_user_status(tmp_path):
     assert remaining == {"expired-applied", "future-new", "free-text-deadline"}
 
 
+def test_set_user_status_stamps_applied_at(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "v1")
+    row = conn.execute("SELECT applied_at FROM vacancies WHERE uuid = 'v1'").fetchone()
+    assert row["applied_at"] is None
+
+    db.set_user_status(conn, "v1", "applied")
+    row = conn.execute("SELECT applied_at, user_status FROM vacancies WHERE uuid = 'v1'").fetchone()
+    assert row["user_status"] == "applied"
+    assert row["applied_at"] is not None
+
+    # A later, unrelated status change leaves the stamp untouched — it's
+    # only meaningful while user_status is still "applied" anyway.
+    db.set_user_status(conn, "v1", "interview")
+    row2 = conn.execute("SELECT applied_at FROM vacancies WHERE uuid = 'v1'").fetchone()
+    assert row2["applied_at"] == row["applied_at"]
+
+
+def test_auto_ignore_stale_applications_after_two_months_no_deadline(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "stale", application_due=None)
+    db.set_user_status(conn, "stale", "applied")
+    conn.execute("UPDATE vacancies SET applied_at = datetime('now', '-3 months') WHERE uuid = 'stale'")
+    conn.commit()
+
+    ignored = db.auto_ignore_stale_applications(conn)
+    assert ignored == 1
+    assert conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'stale'").fetchone()["user_status"] == "ignored"
+
+
+def test_auto_ignore_stale_applications_not_yet_due(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "recent", application_due=None)
+    db.set_user_status(conn, "recent", "applied")
+    conn.execute("UPDATE vacancies SET applied_at = datetime('now', '-3 weeks') WHERE uuid = 'recent'")
+    conn.commit()
+
+    assert db.auto_ignore_stale_applications(conn) == 0
+    assert conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'recent'").fetchone()["user_status"] == "applied"
+
+
+def test_auto_ignore_stale_applications_waits_for_future_deadline(tmp_path):
+    """Applied 3 months ago (past the threshold on its own), but the
+    listing's own deadline is still a month away — the silence clock
+    shouldn't start until the deadline itself passes, since the employer
+    plausibly hasn't started reviewing yet."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "future-deadline")
+    db.set_user_status(conn, "future-deadline", "applied")
+    conn.execute(
+        "UPDATE vacancies SET applied_at = datetime('now', '-3 months'), "
+        "application_due_sort = date('now', '+1 month') WHERE uuid = 'future-deadline'"
+    )
+    conn.commit()
+
+    assert db.auto_ignore_stale_applications(conn) == 0
+
+
+def test_auto_ignore_stale_applications_ignores_other_statuses(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "interesting-old")
+    db.set_user_status(conn, "interesting-old", "interesting")
+    conn.execute("UPDATE vacancies SET applied_at = datetime('now', '-6 months') WHERE uuid = 'interesting-old'")
+    conn.commit()
+
+    assert db.auto_ignore_stale_applications(conn) == 0
+    assert conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'interesting-old'").fetchone()["user_status"] == "interesting"
+
+
+def test_auto_ignore_stale_applications_skips_missing_applied_at(tmp_path):
+    """Rows that were already "applied" before the applied_at column
+    existed have no recorded date to count from — never guessed, never
+    auto-ignored, regardless of how old the row otherwise looks."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "no-timestamp")
+    db.set_user_status(conn, "no-timestamp", "applied")
+    conn.execute("UPDATE vacancies SET applied_at = NULL WHERE uuid = 'no-timestamp'")
+    conn.commit()
+
+    assert db.auto_ignore_stale_applications(conn) == 0
+
+
+def test_get_auto_ignore_date_prefers_later_deadline(tmp_path):
+    conn = _make_conn(tmp_path)
+    d = db.get_auto_ignore_date(conn, "2026-01-01 00:00:00", "2026-06-01")
+    assert d == "2026-08-01"
+
+
+def test_get_auto_ignore_date_falls_back_to_applied_at(tmp_path):
+    conn = _make_conn(tmp_path)
+    d = db.get_auto_ignore_date(conn, "2026-01-01 00:00:00", None)
+    assert d == "2026-03-01"
+
+
+def test_get_auto_ignore_date_none_without_applied_at(tmp_path):
+    conn = _make_conn(tmp_path)
+    assert db.get_auto_ignore_date(conn, None, "2026-06-01") is None
+
+
 def test_delete_archived_ignores_source_status(tmp_path):
     """"archived" ("Смітник") is user-requested deletion, the opposite of
     every other reacted status — unlike delete_inactive/
