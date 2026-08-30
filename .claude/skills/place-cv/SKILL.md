@@ -24,7 +24,20 @@ user: "прибери цю функцію" — the old auto-copy kept resurfacin
 generic CV). Every CV in `profile/generated/<uuid>/` comes from this skill,
 placed deliberately, or doesn't exist yet.
 
-**This "no default" rule is scoped to this skill's pipeline** (`profile/generated/<uuid>/cv.*`, which grounds the søknad-generation prompt). It does not cover attaching a CV file to an actual external application form (a browser-automation submit, LinkedIn Easy Apply, etc.) — there, per the user's 2026-08-27 instruction, the default IS a specific file: `profile/personal.json`'s `default_apply_cv_path` field (the designed Chrome-rendered one — that file lives outside the repo, gitignored, since its filename embeds the user's real name), unless the form itself auto-parses the CV to fill fields — then use `profile/generated/master-cv-no.pdf` instead, since a plain-text PDF parses more reliably than the designed layout. See jobsearch-cv-soknad-rules memory.
+**This "no default" rule is scoped to this skill's pipeline** (`profile/generated/<uuid>/cv.*`, which grounds the søknad-generation prompt). It does not cover attaching a CV file to an actual external application form (a browser-automation submit, LinkedIn Easy Apply, etc.) — there, per the user's 2026-08-27 instruction, the default IS a specific file: `profile/personal.json`'s `default_apply_cv_path` field, unless the form itself auto-parses the CV to fill fields — then use `profile/generated/master-cv-no.pdf` instead, since a plain-text PDF parses more reliably than the designed layout. See jobsearch-cv-soknad-rules memory.
+
+**Incident, 2026-08-30 — a manually-crafted duplicate silently went stale and was sent to at least one employer.** `default_apply_cv_path` used to point at a hand-designed, Chrome-rendered PDF living outside the repo (in OneDrive) with no regeneration mechanism. When `profile_data.py`'s job dates were corrected 2026-08-07 (Verna's dates fixed to no longer overlap FUIB/PUMB), that OneDrive file was never touched — it kept the old, overlapping dates (a CV literally showing two simultaneous jobs). It got set as the default anyway on 2026-08-27 without checking whether it postdated the fix, and per the commit that set it, was used for the Sopra Steria application (`linkedin-4459309713`) on 2026-08-28. **Fix:** `default_apply_cv_path` now points at `profile/generated/master-cv-no.pdf` — script-generated straight from `profile_data.py`, so it can never drift. **Rule going forward: any time `profile_data.py`'s `JOBS` dates/facts change, regenerate all four master CVs before trusting them as a default:**
+```python
+from pathlib import Path
+from cv_builder import build_cv, build_cv_general
+from pdf_export import convert_to_pdf
+out = Path("profile/generated")
+for lang in ("en", "no"):
+    suffix = "-no" if lang == "no" else ""
+    for builder, name in ((build_cv, "master-cv"), (build_cv_general, "master-cv-general")):
+        convert_to_pdf(builder({}, out / f"{name}{suffix}.docx", lang=lang))
+```
+If the user wants the fancier hand-designed look back, that's a deliberate one-off re-export they'd need to trigger themselves after any data change — never assume it's current without checking its mtime against the last `profile_data.py` edit.
 
 ## Steps
 
