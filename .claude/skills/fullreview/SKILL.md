@@ -268,13 +268,20 @@ Budget-style check is N/A here. What actually applies:
 - **PII in tracked files — the highest-stakes item now that the repo is
   public.** Before every push, and especially before touching
   `profile/*.md`, `profile_data.py`, or any test fixture built from a real
-  email:
+  email, grep tracked files for the real name/email/phone/street from
+  `profile/personal.json` (gitignored) — build the pattern from those field
+  values at review time, e.g.:
   ```bash
-  git grep -in "[user]\|[user]\|[user-email]\|pavel\.[user]\|[address]\|[phone]" -- $(git ls-files)
+  python -c "import json,subprocess; p=json.load(open('profile/personal.json')); terms=[p['name'],p['email'],p['phone'],p['street_address']]; subprocess.run(['git','grep','-inF']+sum([['-e',t] for t in terms],[]))"
   ```
-  (adjust the pattern list if new real identifiers appear — this is the
-  exact set found and scrubbed 2026-08-21, not a permanently-complete
-  list). Also check: any new hardcoded lat/long constant (home coordinates
+  **Never hardcode the actual identifier strings into this tracked file** —
+  a real leak, found and fixed 2026-08-30: this exact checklist item used
+  to embed the real name/email-prefix/phone/address fragments in plaintext,
+  live on the public repo, as its own example pattern. Also check: any new
+  third-party name (a referral contact, not the user) landing in
+  `profile/*.md` — generalize to "a contact/referral" instead, don't record
+  another real person's identity even when the user names them in chat.
+  Also check any new hardcoded lat/long constant (home coordinates
   belong in gitignored `profile/personal.json`, not source — see
   `reachability.py`'s `_load_home_coords()`), and that `.gitignore`
   patterns for personal files use a wildcard suffix (`profile/photo.jpg*`,
