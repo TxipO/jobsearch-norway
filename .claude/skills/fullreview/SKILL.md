@@ -237,6 +237,19 @@ traces to a real incident in this project, not a hypothetical.
    hardcoded constant that looks like a real name, email, phone, exact
    coordinate, or document number, must be checked before it's committed —
    see Stage 3's PII checklist, not just this reasoning pass.
+9. **A bare-keyword "requirement" check with no soft/hard distinction.**
+   Any check of the shape `any(kw in text for kw in SOME_KEYWORDS)` feeding
+   a hard_blocks exclusion or a scoring penalty is a false-positive risk
+   whenever the concept itself can be phrased as optional ("er en fordel,
+   men ikke et krav") or negated ("trenger ikke X") — the keyword being
+   unambiguous (unlike item 1's hybrid/remote problem) doesn't save it.
+   **Live bug, 2026-08-30:** `car_penalty` gave the full -20 to every
+   "førerkort" mention alike — 280 of 1425 non-excluded matches were
+   explicitly soft/negated, penalized identically to a hard requirement.
+   The fix: run it through hard_blocks.py's shared
+   `iter_requirement_clauses`/`REQUIREMENT_VERB_RE`/`OPTIONAL_MARKER_RE`
+   machinery (already built for truckførerbevis/forklift) instead of a
+   bare substring check — don't reimplement the distinction per keyword.
 
 ---
 
@@ -270,6 +283,22 @@ Budget-style check is N/A here. What actually applies:
   visibility change specifically: also check the git author identity
   (`git config user.email`) that will be baked into commit metadata, not
   just file contents.
+  **This grep is not enough on its own — this project has other Claude
+  Code sessions/skills committing to the same repo concurrently (the
+  `soknad` skill's own logging, `place-cv`, etc.), and those can introduce
+  a real identifier the fixed pattern list has never seen.** Live case,
+  2026-08-30: a concurrent session's `soknad`-log activity committed (and
+  pushed) the user's real name+local path in `.claude/skills/place-cv/
+  SKILL.md`, and a real third-party referral contact's full name in
+  `profile/cv-reference.md`/`profile/soknad-log.md` — none of that matched
+  the fixed grep pattern above (a NEW identifier, not the known set) and
+  sat live on the public repo until this pass found it by eye while
+  reading `git log`/diffing recent commits, not by grep. On a `deep` pass:
+  skim every file any OTHER skill has written to `profile/*.md` and
+  `.claude/skills/*/SKILL.md` since the last review (`git log --stat` over
+  the range) specifically for named individuals — the user's own name,
+  and anyone else's (referral contacts, recruiters mentioned in a log) —
+  not just the fixed pattern list.
 - **SQL.** Re-verify `_vacancy_filters()` stays fully parameterized as it
   grows (mechanical check #4 covers new `execute(f"...)` patterns, this is
   the "did the LIKE-clause construction stay safe" re-check for the
@@ -307,19 +336,43 @@ Also re-check these specific **hardcoded "enumerate everything" lists**,
 which go stale silently as the project grows (same failure shape as an
 expired precondition — true when written, not re-verified since):
 
-- `scoring._SOURCE_TIE_BREAK_PRIORITY` — as of 2026-08-26 covers
-  `nav`/`jobbnorge`/`easycruit`/`finn`/`linkedin` but **not** `manual` or
-  `work.ua` (both already-live sources), which silently fall through to
-  the lowest tiebreak priority (`.get(c["source"], 99)`) rather than a
-  deliberately-chosen rank. Not urgent — just confirm it's still a
-  deliberate default, not a forgotten gap, each time a source is added.
+- `scoring._SOURCE_TIE_BREAK_PRIORITY` — explicit for every live source as
+  of 2026-08-30 (`nav`/`jobbnorge`/`easycruit`/`finn`/`linkedin`/`work.ua`/
+  `manual`). Re-check for a forgotten new source each time one is added —
+  a silent `.get(c["source"], 99)` fallback is low-severity but easy to
+  miss.
 - `web/app.py`'s `OCCUPATION_CATEGORIES` — a fixed copy of NAV's level1
-  taxonomy. If NAV ever adds/renames a category, the filter dropdown goes
-  stale silently (no error, just a category nobody can filter by). Compare
-  against a fresh `SELECT DISTINCT` over live `occupation_categories` JSON
-  periodically.
+  taxonomy, now including the "Uoppgitt/ ikke identifiserbare" catch-all
+  (added 2026-08-30, was silently unreachable via the filter dropdown).
+  Compare against a fresh `SELECT DISTINCT` over live
+  `occupation_categories` JSON periodically — NAV can still add/rename a
+  category without notice.
 - `scoring.TIER_1_MUNICIPALS` — assumes the user's current location. Revisit
   if that ever changes (see jobsearch-norway-profile memory).
+
+**New class, 2026-08-30 — Norwegian compound-word gap in `hard_blocks.py`
+title patterns.** A pattern with a leading `\b` (e.g. `\bsjåfør`) only
+matches when the word starts a token — Norwegian compounds these words
+together with no boundary ("drosjesjåfør", "kommunepsykolog",
+"anleggsrørlegger"), so the leading `\b` silently misses every compound
+form. This is the SAME lesson `HEALTH_TITLE_PATTERNS`' own sykepleier/lege
+comment already documents, just never swept across the *other* categories
+in the file. On a `deep` pass, for every `\bWORD` pattern in
+`hard_blocks.py`: `re.compile(WORD)` (bare) vs `re.compile(r"\b"+WORD)`
+(current) against live titles, diff the two, and read what's only caught
+by the bare version. **Live sweep, 2026-08-30, found real gaps in nearly
+every category checked:** sjåfør (46 missed — drosjesjåfør, taxisjåfør,
+betongbilsjåfør...), mekaniker (12 — tungvognmekaniker, båtmekaniker,
+lastebilmekaniker...), elektriker/rørlegger/sveiser (compounds each),
+jordmor/psykolog/farmasøyt/bioingeniør (avdelingsjordmor,
+kommunepsykolog, sykehusfarmasøyt, spesialbioingeniør), stipendiat
+("doktorgradsstipendiat" — missed on literally every live posting),
+kranfører, matros, advokat/jurist. **Not every word is safe to widen
+this way** — always sample the bare-match set for a DIFFERENT-profession
+false positive before dropping the `\b`: `frisør` stayed `\b`-anchored
+because "hunde- og kattefrisør" (pet groomer) is a real different
+profession, not a hairdresser compound, and would have been wrongly
+blocked.
 
 ---
 
