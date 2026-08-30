@@ -724,6 +724,57 @@ def _build_description_lender_lookup(rows) -> dict[tuple, tuple[str, str]]:
     return lookup
 
 
+def rescore_one(conn, uuid: str) -> dict | None:
+    """Same per-row scoring work as rescore_all()'s loop body, for a single
+    row — used right after manually adding a vacancy (web/app.py's "Додати
+    вакансію" form) so it gets an immediate score instead of sitting
+    unscored until the next full sync. Deliberately skips the description-
+    lending and cross-source-dedup passes that wrap the loop in
+    rescore_all(): those are batch concerns (borrowing a description from a
+    matching NAV/Jobbnorge row, deciding which physical duplicate "wins")
+    that don't apply to a single freshly-added row in isolation — a manual
+    add already carries whatever description the user typed in."""
+    import db
+    from hard_blocks import check_exclusion
+    from jobbnorge_client import _parse_extent_percent
+
+    row = db.get_vacancy(conn, uuid)
+    if row is None:
+        return None
+
+    description = row["description"]
+    language = row["language"]
+    plain_description = strip_html(description)
+
+    extent_pct = _parse_extent_percent(row["extent"], row["title"], plain_description)
+    if extent_pct != row["extent_percent"]:
+        db.set_extent_percent(conn, uuid, extent_pct)
+
+    salary = _parse_salary(plain_description)
+    salary_min = _salary_min_value(salary)
+    if salary != row["salary_text"] or salary_min != row["salary_min"]:
+        db.set_salary_text(conn, uuid, salary, salary_min)
+
+    is_excluded, reason = check_exclusion(row["title"], plain_description, row["county"], extent_pct)
+    db.set_exclusion(conn, uuid, is_excluded, reason)
+
+    score, breakdown = score_vacancy(
+        row["title"], description, row["municipal"], row["county"], language,
+        row["occupation_categories"], profile="warehouse",
+        extent_percent=extent_pct, engagement_type=row["engagement_type"],
+    )
+    db.set_score(conn, uuid, score, breakdown)
+
+    score_it, breakdown_it = score_vacancy(
+        row["title"], description, row["municipal"], row["county"], language,
+        row["occupation_categories"], profile="it",
+        extent_percent=extent_pct, engagement_type=row["engagement_type"],
+    )
+    db.set_score_it(conn, uuid, score_it, breakdown_it)
+
+    return {"score": score, "score_it": score_it, "excluded": is_excluded, "exclusion_reason": reason}
+
+
 def rescore_all(conn) -> dict:
     import db
     from hard_blocks import check_exclusion

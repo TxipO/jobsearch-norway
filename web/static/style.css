@@ -873,6 +873,34 @@ main:has(.kanban-board) {
   max-width: 60ch;
 }
 
+.add-vacancy-form { max-width: 560px; }
+.add-vacancy-form .form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 1rem;
+}
+.add-vacancy-form label { font-size: 0.7rem; font-weight: 600; color: var(--c-text-muted); }
+.add-vacancy-form input, .add-vacancy-form select, .add-vacancy-form textarea {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--c-border-hi);
+  border-radius: var(--radius-md);
+  background: var(--c-raised);
+  color: var(--c-text);
+  font-size: 0.85rem;
+  font-family: inherit;
+  box-sizing: border-box;
+  width: 100%;
+}
+.add-vacancy-form textarea { resize: vertical; }
+.add-vacancy-form input:focus, .add-vacancy-form select:focus, .add-vacancy-form textarea:focus {
+  outline: none;
+  border-color: var(--c-accent);
+}
+.linkedin-fetch-row { display: flex; gap: 0.5rem; }
+.linkedin-fetch-row input { flex: 1; }
+.linkedin-fetch-row button { flex-shrink: 0; }
+
 #prompt-box {
   width: 100%;
   margin-top: 1rem;
