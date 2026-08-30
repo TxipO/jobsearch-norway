@@ -51,8 +51,16 @@ HEALTH_TITLE_PATTERNS = [
     r"kommuneoverlege", r"sykehjemslege", r"distriktslege",
     r"allmennlege", r"turnuslege",
     r"\btannlege", r"\btannpleier", r"\btannhelsesekret",
-    r"\bfysioterapeut", r"\bergoterapeut", r"\bjordmor", r"\bjordmødre",
-    r"\bpsykolog", r"\bfarmasøyt", r"\bbioingeniør", r"\bradiograf",
+    r"\bfysioterapeut", r"\bergoterapeut",
+    # jordmor/psykolog/farmasøyt/bioingeniør dropped their leading \b
+    # 2026-08-30 (/fullreview deep, Stage 4) — same compound-word reasoning
+    # as sykepleier above. Missed live: avdelingsjordmor, ultralydjordmor,
+    # kommunepsykolog, provisorfarmasøyt, sykehusfarmasøyt,
+    # produksjonsfarmasøyt, spesialbioingeniør, fagbioingeniør — checked
+    # against the full live corpus (85 distinct titles across the four),
+    # every match a genuine authorisation-gated role.
+    r"jordmor", r"jordmødre",
+    r"psykolog", r"farmasøyt", r"bioingeniør", r"\bradiograf",
     r"\bambulanse", r"\bparamedic", r"\boptiker", r"\bkiropraktor",
     r"\bhelsesykepleier", r"\bhelsesjukepleiar", r"\bmiljøterapeut",
     r"\bsosionom", r"\bbarnevernspedagog", r"\bhjelpepleier",
@@ -71,10 +79,25 @@ TEACHING_TITLE_PATTERNS = [
 
 # Academic posts requiring a PhD or at least a master's degree.
 ACADEMIC_TITLE_PATTERNS = [
-    r"\bstipendiat", r"\bpostdoktor", r"\bpostdoc",
+    # stipendiat dropped its leading \b 2026-08-30 (/fullreview deep, Stage
+    # 4) — "doktorgradsstipendiat" (literally "doctoral-degree stipend
+    # position", an even more explicit PhD post than bare "stipendiat")
+    # was missed on every one of dozens of live postings.
+    r"stipendiat", r"\bpostdoktor", r"\bpostdoc",
     r"\bprofessor", r"\bførsteamanuensis", r"\bamanuensis",
     r"\bforsker\b", r"\bforskar\b", r"\bresearcher\b",
     r"\bph\.?d\b",
+    # University/college-level "lektor" — added 2026-08-30 (/fullreview
+    # deep, Stage 4). Deliberately here, not TEACHING_TITLE_PATTERNS's bare
+    # \blektor: "universitetslektor"/"høgskolelektor" require a relevant
+    # master's/PhD in the SUBJECT, not "godkjent lærerutdanning" (the K-12
+    # pedagogical certification TEACHING_TITLE_PATTERNS is actually about)
+    # — a real, not just cosmetic, distinction: unlike a K-12 lektor role,
+    # these are gated on academic degree level, so blocking them under the
+    # pedagogical-education reason would misattribute why they're
+    # unreachable. 26 live titles measured, all genuine academic posts.
+    r"universitetslektor", r"høgskolelektor", r"førstelektor",
+    r"universitetslærer", r"høgskolelærer",
 ]
 
 # Skilled trades gated behind a Norwegian fagbrev / certificate of
@@ -85,10 +108,28 @@ ACADEMIC_TITLE_PATTERNS = [
 # skilled trade" (see that list's own comment in scoring.py), but the
 # matching hard_blocks title-block was never actually added until now.
 TRADE_TITLE_PATTERNS = [
-    r"\belektriker", r"\belektrikar", r"\brørlegger", r"\brøyrleggjar",
-    r"\btømrer", r"\btømrar", r"\bsveiser", r"\bsveisar",
-    r"\bfrisør", r"\bbilmekaniker", r"\bmekanikar",
-    r"\banleggsmaskinfører", r"\bkranfører",
+    # elektriker/rørlegger/tømrer/sveiser/mekaniker deliberately have NO
+    # leading \b — same compound-word reasoning as sjåfør above and
+    # HEALTH_TITLE_PATTERNS' sykepleier/lege entries. Found 2026-08-30
+    # (/fullreview deep, Stage 4): serviceelektriker/industrielektriker,
+    # anleggsrørlegger, aluminiumssveiser/plastsveiser, and a dozen
+    # *mekaniker compounds (tungvognmekaniker, båtmekaniker,
+    # lastebilmekaniker, bussmekaniker, motormekaniker, anleggsmekaniker...)
+    # were all missed and still visible — checked against the live corpus,
+    # every compound was a genuine fagbrev-gated trade variant, 0 false
+    # positives. "industrimekaniker"/"industrimekanikar" below are now
+    # redundant with bare "mekaniker" but left in place (harmless, and the
+    # bare-word audit specifically confirmed them already).
+    r"elektriker", r"elektrikar", r"rørlegger", r"røyrleggjar",
+    r"tømrer", r"tømrar", r"sveiser", r"sveisar", r"mekaniker", r"mekanikar",
+    # frisør KEEPS its leading \b — unlike the others above, its compound
+    # false-positive is real: "hunde- og kattefrisør" (pet groomer) is a
+    # different profession entirely, not the same hairdressing fagbrev.
+    r"\bfrisør",
+    # kranfører dropped its leading \b 2026-08-30 (/fullreview deep, Stage
+    # 4) — "tårnkranfører" (tower-crane operator) was missed; checked, 0
+    # false positives.
+    r"\banleggsmaskinfører", r"kranfører",
     r"\bautomatiker", r"\bautomatikar", r"\bindustrimekaniker", r"\bindustrimekanikar",
     r"\binstrumenttekniker", r"\binstrumentation technician", r"\bcnc\b",
     r"\bplatearbeider", r"\bplatearbeidar", r"\bindustrirørlegger",
@@ -111,15 +152,31 @@ ENGINEERING_TITLE_PATTERNS = [
 
 # Roles requiring driving/maritime certificates the user does not hold
 # (no driving licence at all — see jobsearch-norway-profile memory).
+# sjåfør/sjåfor deliberately have NO leading \b — same compound-word
+# reasoning as HEALTH_TITLE_PATTERNS' sykepleier/lege entries above.
+# Found 2026-08-30 (/fullreview deep, Stage 4): 46 live active,
+# non-excluded titles were pure driver compounds the leading-\b version
+# missed entirely — drosjesjåfør, taxisjåfør, betongbilsjåfør,
+# varebilsjåfør, kranbilsjåfør, servicesjåfør, budbilsjåfør, and more —
+# checked against the full live corpus, 0 false positives (every match
+# was a genuine driving role).
 LICENCE_TITLE_PATTERNS = [
-    r"\bsjåfør", r"\bsjåfor", r"\bbussjåfør", r"\blastebilsjåfør",
+    r"sjåfør", r"sjåfor",
     r"\bstyrmann", r"\boverstyrmann", r"\bmaskinist", r"\bskipsfører",
-    r"\bmatros", r"\bkaptein", r"\bmaskinsjef",
+    # matros dropped its leading \b same pass — "lettmatros" (ordinary/
+    # junior seaman) was missed; checked, 0 false positives.
+    r"matros", r"\bkaptein", r"\bmaskinsjef",
 ]
 
 # Regulated legal/finance professions.
 LEGAL_FINANCE_TITLE_PATTERNS = [
-    r"\badvokat", r"\bjurist", r"\brevisor", r"\bregnskapsfører",
+    # advokat/jurist dropped their leading \b 2026-08-30 (/fullreview deep,
+    # Stage 4) — "politiadvokat" (police prosecutor), "bistandsadvokat"
+    # (victim's counsel), "arbeidsrettsjurist" (labor-law jurist),
+    # "virksomhetsjurist" (in-house/corporate jurist) were all missed;
+    # checked against the live corpus, every compound genuinely requires a
+    # law degree/bar admission.
+    r"advokat", r"jurist", r"\brevisor", r"\bregnskapsfører",
     r"\brekneskapsførar",
     # "Juridisk rådgiver" (legal advisor) — same law-degree requirement as
     # "jurist" but a different word (adjective, not the noun "jurist"), so
@@ -296,7 +353,7 @@ REQUIREMENT_HEADING_RE = re.compile(
     r"|^(?:krav til (?:søker|deg)|kompetansekrav|formelle krav|vi krever|vi krev)\s*[:–-]*$"
     r"|^(?:du må ha|den som (?:ansettes|tilsettes) må ha|dette må du ha[\wæøå\s]*)\s*[:–-]*$"
     r"|^(?:i praksis betyr det at du har|vi ser etter deg som|vi søker deg som|"
-    r"hvem ser vi etter|hvem er du|om deg)\s*[:–-]*$"
+    r"hvem ser vi etter|hva vi ser etter|hva ser vi etter|hvem er du|om deg)\s*[:–-]*$"
     r"|^(?:requirements?|qualifications?|your background|"
     r"education\s*(?:&|and)\s*experience|"
     r"what we(?:'re| are) looking for|what we expect|who you are|"
@@ -363,7 +420,15 @@ OPTIONAL_MARKER_RE = re.compile(
     r"eller tilsvarende|eller tilsvarande|eller liknende|eller lignende|"
     r"eller realkompetanse|eller relevant erfaring|eller erfaring|eller lang erfaring|"
     r"an advantage|considered an advantage|is a plus|preferred\b|or equivalent|"
-    r"nice to have|not required|desirable|training (?:can|will) be provided|we will train"
+    r"nice to have|not required|desirable|training (?:can|will) be provided|we will train|"
+    # Direct negation of the requirement verb itself ("trenger ikke X",
+    # "krever ikke X") — added 2026-08-30 (/fullreview deep, Stage 4):
+    # found via car_penalty's own new test ("Du trenger ikke førerkort for
+    # denne stillingen" was scored as a hard requirement, since
+    # REQUIREMENT_VERB_RE's bare `trenger`/`krever` matched with no
+    # negation check at all). 381 live matches for this shape, not a rare
+    # edge case.
+    r"trenger ikke|trengs ikke|krever ikke|kreves ikke"
 )
 _PARENS_RE = re.compile(r"\([^)]*\)")
 

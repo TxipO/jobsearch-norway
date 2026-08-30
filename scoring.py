@@ -155,6 +155,14 @@ DEV_TITLE_KEYWORDS = [
     "utvikler", "developer", "programmerer", "data engineer",
     "software engineer", "fullstack", "full-stack", "full stack",
     "backend", "frontend", "devops", "data scientist", "dataingeniør",
+    # Added 2026-08-30 (/fullreview deep, Stage 2 check #1) — "data
+    # engineer"/"software engineer" alone missed the same class of role
+    # spelled with an extra word or a different noun: "Data & Analytics
+    # Engineer" (47), "IT Cloud Platform Engineer" (35), "Database
+    # Engineer" (27), "Analytics Engineer" (26) all slipped through
+    # unpenalized. Checked against the live corpus — all 4 phrases match
+    # only genuinely software/data-engineering titles, 0 collisions.
+    "platform engineer", "cloud engineer", "analytics engineer", "database engineer",
 ]
 DEV_TITLE_PENALTY = -40
 
@@ -250,6 +258,26 @@ CAR_REQUIRED_KEYWORDS = [
     "egen bil", "førerkort", "eget kjøretøy", "driver's license",
     "driving licence", "must have a car",
 ]
+
+
+def _has_unmet_car_requirement(text: str) -> bool:
+    """Section/clause-aware, added 2026-08-30 (/fullreview deep, Stage 4):
+    the previous bare `any(kw in text ...)` check gave the full -20 penalty
+    to EVERY mention, including explicitly soft/negated ones — measured
+    live: 280 of 1425 non-excluded matches for "førerkort" alone read as
+    "er en fordel, men ikke et krav"/"ikke nødvendig"/similar, yet all got
+    penalized identically to a hard "må ha førerkort". Same bug shape as
+    the truckførerbevis/forklift-certificate checks, so it reuses their
+    exact clause/section machinery (hard_blocks.iter_requirement_clauses)
+    rather than reimplementing it."""
+    for clause, in_required_section in iter_requirement_clauses(text):
+        if not any(kw in clause for kw in CAR_REQUIRED_KEYWORDS):
+            continue
+        if OPTIONAL_MARKER_RE.search(clause):
+            continue
+        if REQUIREMENT_VERB_RE.search(clause) or in_required_section:
+            return True
+    return False
 
 # NAV's own occupation_categories JSON (level1 only — level2 is far more
 # granular than useful here) — added 2026-08-18 alongside the Track B
@@ -560,7 +588,7 @@ def score_vacancy(
         location_reason = "utenfor Vestland"
     breakdown["location_bonus"] = {"points": location_score, "reason": location_reason}
 
-    requires_car = any(kw in text for kw in CAR_REQUIRED_KEYWORDS)
+    requires_car = _has_unmet_car_requirement(text)
     car_penalty = -20 if requires_car else 0
     breakdown["car_penalty"] = {"points": car_penalty, "matched": requires_car}
 
@@ -942,7 +970,15 @@ def _propagate_hard_blocks_across_group(conn, candidates: list[dict]) -> int:
 # data-completeness order: nav/jobbnorge/easycruit always carry a real own
 # description, finn/linkedin never do (borrowed at best) — see
 # jobsearch-norway-sources memory. Anything not listed sorts last.
-_SOURCE_TIE_BREAK_PRIORITY = {"nav": 0, "jobbnorge": 1, "easycruit": 2, "finn": 3, "linkedin": 4}
+# Explicit for every live source (2026-08-30, /fullreview deep Stage 4 —
+# "manual"/"work.ua" existed in the DB but fell through to the .get()
+# fallback of 99 implicitly) — both are hand-entered/low-volume sources,
+# deliberately lowest priority: if the same posting also appears via an
+# official feed, that copy should win the tiebreak as the visible keeper.
+_SOURCE_TIE_BREAK_PRIORITY = {
+    "nav": 0, "jobbnorge": 1, "easycruit": 2, "finn": 3, "linkedin": 4,
+    "work.ua": 5, "manual": 6,
+}
 
 
 def _exclude_cross_source_duplicates(conn, candidates: list[dict]) -> int:

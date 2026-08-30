@@ -491,3 +491,78 @@ def test_explicit_hard_verb_overrides_optional_heading():
     )
     excluded, _ = check_exclusion("Warehouse worker", strip_html(html))
     assert excluded
+
+
+# --- Round 3 (2026-08-30, /fullreview deep Stage 4): Norwegian-compound
+# title gaps found by comparing every leading-\b pattern against the live
+# corpus — same class of bug as the sykepleier/lege compounds already
+# documented above, just never checked for these specific words before.
+
+def test_compound_driver_titles_blocked():
+    """drosjesjåfør/taxisjåfør/betongbilsjåfør etc. — bare "sjåfør" has no
+    leading \\b precisely so these compounds match."""
+    for title in ("Drosjesjåfør søkes", "Taxisjåfør – Bergen", "Betongbilsjåfør",
+                  "Varebilsjåfør søkes", "Kranbilsjåfør Klasse CE"):
+        excluded, _ = check_exclusion(title, "")
+        assert excluded, title
+
+
+def test_compound_trade_titles_blocked():
+    for title in ("Serviceelektriker søkes", "Anleggsrørlegger", "Aluminiumssveiser",
+                  "Tungvognmekaniker", "Båtmekaniker"):
+        excluded, _ = check_exclusion(title, "")
+        assert excluded, title
+
+
+def test_pet_groomer_frisor_compound_not_blocked():
+    """Unlike the trade compounds above, "frisør" keeps its leading \\b —
+    "hunde- og kattefrisør" (pet groomer) is a different profession, not
+    the same hairdressing fagbrev."""
+    excluded, _ = check_exclusion("Er du en lidenskapelig hunde- og kattefrisør?", "")
+    assert not excluded
+
+
+def test_compound_health_titles_blocked():
+    for title in ("Avdelingsjordmor", "Kommunepsykolog", "Sykehusfarmasøyt", "Spesialbioingeniør"):
+        excluded, reason = check_exclusion(title, "")
+        assert excluded, title
+        assert "авторизація" in reason
+
+
+def test_compound_academic_titles_blocked():
+    excluded, reason = check_exclusion("Doktorgradsstipendiat i lingvistikk", "")
+    assert excluded
+    assert "PhD" in reason or "магістр" in reason
+
+
+def test_university_lektor_categorized_as_academic_not_pedagogical():
+    """"Universitetslektor" requires a master's/PhD in the subject, not
+    Norwegian pedagogical certification (godkjent lærerutdanning) — the
+    two reasons aren't interchangeable, so this must land in the academic
+    category, not TEACHING_TITLE_PATTERNS's bare "lektor"."""
+    excluded, reason = check_exclusion("Universitetslektor i organisasjon og ledelse", "")
+    assert excluded
+    assert "PhD" in reason or "магістр" in reason
+
+
+def test_k12_lektor_still_categorized_as_pedagogical():
+    excluded, reason = check_exclusion("Lektor i matematikk ved en videregående skole", "")
+    assert excluded
+    assert "педагогічна" in reason
+
+
+def test_compound_legal_titles_blocked():
+    for title in ("Politiadvokat/politifullmektig", "Bistandsadvokat søkes",
+                  "Arbeidsrettsjurist", "Virksomhetsjurist"):
+        excluded, _ = check_exclusion(title, "")
+        assert excluded, title
+
+
+def test_compound_maritime_titles_blocked():
+    excluded, _ = check_exclusion("Er du vår nye matros/lettmatros?", "")
+    assert excluded
+
+
+def test_compound_crane_operator_title_blocked():
+    excluded, _ = check_exclusion("Riggmann og tårnkranfører", "")
+    assert excluded
