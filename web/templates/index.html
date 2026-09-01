@@ -4,7 +4,7 @@
 <h1 class="sr-only">Список вакансій</h1>
 
 <div class="sync-bar">
-  <form method="post" action="/sync" onsubmit="const b=this.querySelector('button'); b.disabled=true; b.textContent='Синхронізація… (може тривати до кількох хвилин)'; this.querySelector('.sync-progress').style.display='block';">
+  <form method="post" action="/sync" onsubmit="event.preventDefault(); const b=this.querySelector('button'); b.disabled=true; b.textContent='Синхронізація… (може тривати до кількох хвилин)'; this.querySelector('.sync-progress').style.display='block'; fetch(this.action, {method: 'POST'}).then(() => location.reload()).catch(() => location.reload());">
     <button type="submit" class="sync-btn">Sync now</button>
     <div class="sync-progress" style="display:none"><div class="sync-progress-bar"></div></div>
   </form>
