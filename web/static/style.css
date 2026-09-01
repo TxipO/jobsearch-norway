@@ -241,6 +241,33 @@ main:has(.kanban-board) {
   .sync-btn:disabled { animation: none; }
 }
 
+/* Indeterminate progress bar shown alongside the pulsing button — sync has
+   no real progress events to report (one blocking call across 5 sources),
+   so this is honestly indeterminate (a sliding stripe), not a fake
+   percentage. */
+.sync-progress {
+  width: 100%;
+  max-width: 320px;
+  height: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--c-border);
+  overflow: hidden;
+}
+.sync-progress-bar {
+  width: 40%;
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--c-accent);
+  animation: sync-progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes sync-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-progress-bar { animation: none; width: 100%; opacity: 0.5; }
+}
+
 .sync-status {
   display: flex;
   flex-direction: column;
