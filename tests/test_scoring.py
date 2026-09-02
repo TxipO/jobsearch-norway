@@ -217,7 +217,11 @@ def test_salary_parses_currency_prefixed_figure():
 
 
 def test_salary_parses_range():
-    assert _parse_salary("Lønn kr. 522.600-635.600 avhengig av erfaring.") == "kr. 522.600-635.600"
+    """Numbers-only, normalized separator, regardless of the source's own
+    punctuation (dot here vs. space elsewhere) — user feedback, 2026-09-02:
+    the badge is a compact tag, it doesn't need the source's own formatting
+    carried through verbatim."""
+    assert _parse_salary("Lønn kr. 522.600-635.600 avhengig av erfaring.") == "kr 522 600 – 635 600"
 
 
 def test_salary_ignores_bare_numbers_without_currency_prefix():
@@ -242,10 +246,11 @@ def test_salary_parses_kr_as_a_suffix_when_lonn_anchored():
     guards against (measured live: 211 descriptions match with no kr-prefix
     hit, mostly referral bonuses and student-loan write-offs) — requiring a
     lønn/årslønn keyword within 40 chars narrows that to 85, spot-checked
-    clean."""
+    clean. The anchoring words themselves ("lønn mellom ... og") are then
+    stripped by _format_salary — they justified the match, not the badge."""
     assert _parse_salary("Full stilling med lønn mellom 380 000 og 520 000 kr, avhengig av erfaring.") \
-        == "lønn mellom 380 000 og 520 000 kr"
-    assert _parse_salary("Vi tilbyr årslønn 397 000 - 494 200 kr.") == "årslønn 397 000 - 494 200 kr"
+        == "kr 380 000 – 520 000"
+    assert _parse_salary("Vi tilbyr årslønn 397 000 - 494 200 kr.") == "kr 397 000 – 494 200"
 
 
 def test_salary_suffix_still_requires_a_salary_keyword():
@@ -277,6 +282,13 @@ def test_salary_min_value_takes_the_first_figure_in_a_range():
 
 def test_salary_min_value_none_when_absent():
     assert _salary_min_value(None) is None
+
+
+def test_salary_min_value_parses_the_new_normalized_format():
+    """_parse_salary's own output must still round-trip through
+    _salary_min_value — the two are used together in rescore_all()."""
+    assert _salary_min_value("kr 380 000 – 520 000") == 380000
+    assert _salary_min_value("kr 680 000") == 680000
 
 
 def test_people_management_requirement_is_penalized():
