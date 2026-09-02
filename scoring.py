@@ -690,6 +690,27 @@ SALARY_SUFFIX_RE = re.compile(
 )
 
 
+_SALARY_NUMBER_RE = re.compile(r"\d[\d\s.\xa0]*\d|\d")
+
+
+def _format_salary(raw_match: str) -> str:
+    """Numbers only, normalized to a single space thousand-separator, 'kr'
+    prefix — regardless of which regex matched or how the source spaced/
+    punctuated it (space, dot, nbsp all appear in the wild; the lønn-suffix
+    match also drags along words like "lønn mellom ... og"). User feedback,
+    2026-09-02: the badge is a compact list-row tag, the surrounding words
+    are read-once noise there even when they're informative in the source
+    text — collapse everything to what the badge actually needs."""
+    nums = []
+    for m in _SALARY_NUMBER_RE.findall(raw_match):
+        digits = re.sub(r"[\s.\xa0]", "", m)
+        if digits:
+            nums.append(f"{int(digits):,}".replace(",", " "))
+    if not nums:
+        return raw_match.strip(" .-")
+    return "kr " + " – ".join(nums[:2])
+
+
 def _parse_salary(text: str | None) -> str | None:
     if not text:
         return None
@@ -698,7 +719,7 @@ def _parse_salary(text: str | None) -> str | None:
         m = SALARY_SUFFIX_RE.search(text)
     if not m:
         return None
-    return m.group(0).strip(" .-")
+    return _format_salary(m.group(0))
 
 
 _SALARY_FIGURE_RE = re.compile(r"\d[\d\s.]*")
