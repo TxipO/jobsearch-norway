@@ -124,31 +124,39 @@ def test_multiple_statuses_are_ored_together(tmp_path, monkeypatch):
     assert "job-rejected" not in body
 
 
-def test_applied_vacancy_visible_in_default_listing_after_listing_closes(tmp_path, monkeypatch):
-    """Live report 2026-08-16: the user could not find a vacancy they had
-    applied to (Alstahaug kommune) by browsing or searching — it only
-    turned up via a direct /vacancy/<uuid> link. The row was fine
-    (user_status='applied'), but NAV had closed the listing, and the
-    previous fix only exempted active_only when the user explicitly
-    selected "Відгукнувся" in the filter panel. Default browsing and
-    search must show it too, with zero filters selected."""
+def test_applied_vacancy_hidden_from_default_listing_but_survives_a_closed_source(tmp_path, monkeypatch):
+    """Live report 2026-08-16 established that an applied vacancy must never
+    vanish just because NAV closed the listing (active_only exemption). User-
+    requested 2026-09-02 ("чисто Нове та Цікаво") layered a separate rule on
+    top: the *default* (zero-filter) view now only shows "new"/"interesting"
+    at all, applied included — same treatment rejected/ignored already had
+    since 2026-08-23. Both hold at once: gone from the default view, but
+    explicitly filtering to "Відгукнувся" still finds it regardless of the
+    listing's own ACTIVE/INACTIVE state — the 2026-08-16 guarantee, just one
+    click away instead of zero."""
     conn = _setup(tmp_path, monkeypatch)
     _insert(conn, "closed-but-applied-default")
     db.set_user_status(conn, "closed-but-applied-default", "applied")
     scoring.rescore_all(conn)
     _close_listing(conn, "closed-but-applied-default")
 
-    assert "closed-but-applied-default" in _render(conn)
+    assert "closed-but-applied-default" not in _render(conn)
+    assert "closed-but-applied-default" in _render(conn, user_status=["applied"])
 
 
-def test_applied_vacancy_visible_in_search_after_listing_closes(tmp_path, monkeypatch):
+def test_applied_vacancy_hidden_from_default_search_but_findable_when_filtered(tmp_path, monkeypatch):
+    """Same supersession as above, for search specifically: a plain
+    zero-filter search no longer surfaces applied vacancies, but adding the
+    "Відгукнувся" filter still finds it even after the source closes the
+    listing (the original 2026-08-16 guarantee)."""
     conn = _setup(tmp_path, monkeypatch)
     _insert(conn, "closed-but-applied-search", title="Senior IT-konsulent Alstahaug")
     db.set_user_status(conn, "closed-but-applied-search", "applied")
     scoring.rescore_all(conn)
     _close_listing(conn, "closed-but-applied-search")
 
-    assert "closed-but-applied-search" in _render(conn, q="Alstahaug")
+    assert "closed-but-applied-search" not in _render(conn, q="Alstahaug")
+    assert "closed-but-applied-search" in _render(conn, q="Alstahaug", user_status=["applied"])
 
 
 def test_interesting_vacancy_still_hidden_by_default_after_listing_closes(tmp_path, monkeypatch):
