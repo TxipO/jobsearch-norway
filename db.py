@@ -240,7 +240,12 @@ def set_state(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.commit()
 
 
-def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: dict) -> None:
+def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: dict) -> bool:
+    """Returns True if this inserted a vacancy we had never seen, False if it
+    updated one we already held. The caller needs the distinction to report an
+    honest "N new / M updated" instead of one lump count that reads as "N new"
+    even when the feed only re-sent ads we already had."""
+    is_new = conn.execute("SELECT 1 FROM vacancies WHERE uuid = ?", (uuid,)).fetchone() is None
     employer = ad.get("employer") or {}
     work_locations = ad.get("workLocations") or [{}]
     location = work_locations[0] if work_locations else {}
@@ -304,6 +309,7 @@ def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: 
         ),
     )
     conn.commit()
+    return is_new
 
 
 def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None:
