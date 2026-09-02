@@ -673,11 +673,29 @@ SALARY_RE = re.compile(
     re.I,
 )
 
+# "kr" as a SUFFIX instead of a prefix — "lønn mellom 380 000 og 520 000 kr",
+# "årslønn 397 000 - 494 200 kr". Missed entirely by SALARY_RE above (live
+# case, 2026-09-02: real "lønn mellom X og Y kr" text, salary badge blank).
+# A bare number-then-kr suffix alone is just as noisy as the bare-number
+# problem SALARY_RE already guards against — measured live: 211/~9800
+# descriptions have one with no "kr"-prefix match, and most are referral
+# bonuses/student-loan write-offs ("Hos oss får du 20 000 kr i sign-on"),
+# not salary. Anchoring on a lønn/årslønn keyword within 40 chars before the
+# figure narrows that to 85, spot-checked clean (one stray "vi avlønner med
+# 10 000 kr pr veiledet student" — a mentoring stipend, not the job's own
+# salary — accepted as noise at this rate).
+SALARY_SUFFIX_RE = re.compile(
+    r"(?:lønn\w*|årslønn)\b[^.]{0,40}?\d[\d\s.]{4,10}(?:\s?(?:og|til|[-–])\s?\d[\d\s.]{4,10})?\s?kr\b",
+    re.I,
+)
+
 
 def _parse_salary(text: str | None) -> str | None:
     if not text:
         return None
     m = SALARY_RE.search(text)
+    if not m:
+        m = SALARY_SUFFIX_RE.search(text)
     if not m:
         return None
     return m.group(0).strip(" .-")
