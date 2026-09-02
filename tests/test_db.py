@@ -167,49 +167,52 @@ def test_inactive_status_hidden_from_active_only(tmp_path):
 
 def test_active_only_exempts_reacted_statuses_beyond_new_and_interesting(tmp_path):
     """User-requested 2026-08-16: any vacancy the user has moved past the
-    untouched-backlog states must stay visible everywhere — default
-    browsing, search, every filter combination — even after the source
-    closes the listing. 'new' and 'interesting' are still backlog, so they
-    stay subject to the ACTIVE-only rule; every other status is exempt.
-    'rejected'/'ignored' are still exempt from the ACTIVE-only rule itself —
-    they just don't show in the default *unfiltered* list any more (see
-    test_rejected_and_ignored_hidden_by_default_below), a separate rule."""
+    untouched-backlog states must stay visible everywhere — search, every
+    explicit filter combination — even after the source closes the listing.
+    'new' and 'interesting' are still backlog, so they stay subject to the
+    ACTIVE-only rule; every other status is exempt from ACTIVE-only itself,
+    independent of whether the *default unfiltered* list also hides it (see
+    test_only_new_and_interesting_shown_by_default below — a separate
+    rule)."""
     conn = _make_conn(tmp_path)
     for status in ("applied", "interview", "offer", "rejected", "ignored", "archived"):
         _insert_vacancy(conn, f"inactive-{status}", status="INACTIVE")
         db.set_user_status(conn, f"inactive-{status}", status)
 
+    # None of these are "new"/"interesting", so all are absent from the
+    # default (unfiltered) view regardless of ACTIVE-only.
     visible = {r["uuid"] for r in db.list_vacancies(conn, active_only=True)}
-    for status in ("applied", "interview", "offer", "archived"):
-        assert f"inactive-{status}" in visible
-    # Confirmed absent from the *default* view by the status-hiding rule
-    # below — but still exempt from ACTIVE-only once explicitly filtered.
-    for status in ("rejected", "ignored"):
+    for status in ("applied", "interview", "offer", "rejected", "ignored", "archived"):
         assert f"inactive-{status}" not in visible
         filtered = {r["uuid"] for r in db.list_vacancies(conn, active_only=True, user_status=status)}
-        assert f"inactive-{status}" in filtered
+        assert f"inactive-{status}" in filtered, f"{status} must still be exempt from ACTIVE-only when filtered"
 
 
-def test_rejected_and_ignored_hidden_by_default_but_shown_when_filtered(tmp_path):
-    """User-requested 2026-08-23: "Відмова"/"Ігнор" clutter the default main
-    list once there are enough of them — hide by default, but keep them one
-    filter-panel click away rather than making them disappear outright."""
+def test_only_new_and_interesting_shown_by_default(tmp_path):
+    """User-requested 2026-08-23 (rejected/ignored only) then widened
+    2026-09-02 to "чисто Нове та Цікаво": every reacted-to status clutters
+    the default main list once there are enough of them — hide all of them
+    by default, but keep each one filter-panel click away rather than making
+    them disappear outright."""
     conn = _make_conn(tmp_path)
     _insert_vacancy(conn, "v-new")
     db.set_user_status(conn, "v-new", "new")
-    _insert_vacancy(conn, "v-rejected")
-    db.set_user_status(conn, "v-rejected", "rejected")
-    _insert_vacancy(conn, "v-ignored")
-    db.set_user_status(conn, "v-ignored", "ignored")
+    _insert_vacancy(conn, "v-interesting")
+    db.set_user_status(conn, "v-interesting", "interesting")
+    hidden_statuses = ("applied", "interview", "offer", "rejected", "ignored")
+    for status in hidden_statuses:
+        _insert_vacancy(conn, f"v-{status}")
+        db.set_user_status(conn, f"v-{status}", status)
 
     default_view = {r["uuid"] for r in db.list_vacancies(conn)}
-    assert default_view == {"v-new"}
+    assert default_view == {"v-new", "v-interesting"}
 
-    assert db.count_vacancies(conn) == 1
-    assert db.count_vacancies(conn, user_status=["rejected", "ignored"]) == 2
+    assert db.count_vacancies(conn) == 2
+    assert db.count_vacancies(conn, user_status=list(hidden_statuses)) == len(hidden_statuses)
 
-    rejected_filtered = {r["uuid"] for r in db.list_vacancies(conn, user_status="rejected")}
-    assert rejected_filtered == {"v-rejected"}
+    for status in hidden_statuses:
+        filtered = {r["uuid"] for r in db.list_vacancies(conn, user_status=status)}
+        assert filtered == {f"v-{status}"}
 
 
 def test_active_only_still_hides_interesting_and_new_when_inactive(tmp_path):
@@ -244,7 +247,9 @@ def test_delete_inactive_keeps_user_reacted_rows(tmp_path):
 
     deleted = db.delete_inactive(conn)
     assert deleted == 1
-    remaining = {r["uuid"] for r in db.list_vacancies(conn, active_only=False)}
+    # Explicit user_status=all: this checks what's left in the table after
+    # deletion, not the default (new/interesting-only) view's own filtering.
+    remaining = {r["uuid"] for r in db.list_vacancies(conn, active_only=False, user_status=list(db.USER_STATUSES))}
     assert remaining == {"closed-but-applied"}
 
 
@@ -383,7 +388,9 @@ def test_delete_expired_unreacted_respects_user_status(tmp_path):
     deleted = db.delete_expired_unreacted(conn)
     assert deleted == 1
 
-    remaining = {r["uuid"] for r in db.list_vacancies(conn, active_only=False)}
+    # Explicit user_status=all: checking what's left in the table, not the
+    # default (new/interesting-only) view's own filtering.
+    remaining = {r["uuid"] for r in db.list_vacancies(conn, active_only=False, user_status=list(db.USER_STATUSES))}
     assert remaining == {"expired-applied", "future-new", "free-text-deadline"}
 
 
@@ -526,7 +533,9 @@ def test_delete_archived_ignores_source_status(tmp_path):
     deleted = db.delete_archived(conn)
     assert deleted == 2
 
-    remaining = {r["uuid"] for r in db.list_vacancies(conn, active_only=False)}
+    # Explicit user_status=all: checking what's left in the table, not the
+    # default (new/interesting-only) view's own filtering.
+    remaining = {r["uuid"] for r in db.list_vacancies(conn, active_only=False, user_status=list(db.USER_STATUSES))}
     assert remaining == {"kept-applied"}
 
 
