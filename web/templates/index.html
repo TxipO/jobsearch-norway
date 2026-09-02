@@ -12,8 +12,13 @@
   <div class="sync-status">
     <div class="sync-time">Останній sync: {{ last_sync.at }}</div>
     <div class="sync-stats">
-      <span class="sync-stat" title="Порівняно з попередньою синхронізацією — NAV віддає лише зміни (інкрементальний фід)">
-        NAV: <strong>+{{ last_sync.stats.active_upserted }}</strong> нових/оновлених · <strong>−{{ last_sync.stats.marked_inactive }}</strong> деактивовано
+      <span class="sync-stat" title="NAV віддає лише зміни з моменту минулого sync (інкрементальний фід). «Нових» — яких не було в базі взагалі; «оновлених» — які вже були, роботодавець змінив оголошення.">
+        NAV: <strong>+{{ last_sync.stats.new|default(last_sync.stats.active_upserted)|default(0) }}</strong> нових ·
+        <strong>{{ last_sync.stats.updated|default(0) }}</strong> оновлених ·
+        <strong>−{{ last_sync.stats.marked_inactive|default(0) }}</strong> деактивовано
+        {%- if last_sync.stats.detail_missing|default(0) %}
+        · <strong title="NAV не віддав деталі оголошення — пропущено">{{ last_sync.stats.detail_missing }}</strong> без деталей
+        {%- endif %}
       </span>
       <span class="sync-stat" title="Jobbnorge не веде історію змін — це повний знімок усіх активних вакансій станом на зараз, а не порівняння з минулим sync">
         Jobbnorge: <strong>{{ last_sync.jobbnorge.fetched if last_sync.jobbnorge else '—' }}</strong> активних зараз

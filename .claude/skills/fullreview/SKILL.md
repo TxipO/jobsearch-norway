@@ -266,6 +266,38 @@ traces to a real incident in this project, not a hypothetical.
     data it's supposed to represent (here, `profile_data.py`) — if there's
     no cheap way to verify staleness, prefer pointing at the generator's
     own output instead of a hand-made copy.
+11. **A "nothing changed" answer treated as "nothing to do".** Conditional
+    requests (`If-None-Match`/`If-Modified-Since`), cursors, watermarks and
+    `updatedSince` params all answer *"this thing is unchanged"* — which is
+    also permanently true of anything finalized. Trace what a negative
+    answer means when the resource is **sealed**, not just when it is idle.
+    **Live bug, found 2026-09-02 (two days of NAV silently lost):** NAV
+    serves a *sealed* feed page's `next_id` **as that page's ETag**, so an
+    ETag stored against a sealed page matches for eternity. `nav_client.sync`
+    left the cursor on the page it had just read, stored that ETag, then
+    fetched the next page — and any failure at that point (blip, rotated
+    public token) froze the cursor there. Every later sync sent
+    `If-None-Match`, got 304, broke out, and reported `+0 new / −0
+    deactivated` while 12 pages / 10 375 entries queued up behind it. Two
+    lessons: make the cursor point at what to consume **next** (never linger
+    on a fully-consumed page), and **check what the validator is actually
+    computed from** before trusting it. Measuring it settled the design here:
+    NAV's ETag equals the page's own `next_id` and does not change as entries
+    are appended, so it answers "has the next-page pointer moved", not "is
+    there new content" — it returned 304 with two pages of new ads behind it.
+    The fix was to delete the conditional request entirely rather than nurse
+    it: when a cache validator provably cannot answer the question being
+    asked of it, removing it is smaller *and* more correct than guarding it.
+12. **A counter that reports 0 for both "idle" and "broken".** If the only
+    number a subsystem surfaces is indistinguishable between healthy-idle
+    and totally-wedged, an outage is invisible for as long as the user
+    tolerates quiet days — here, a week. Same 2026-09-02 incident: the UI
+    said `+0 нових/оновлених` every day and looked exactly like a slow news
+    day. Also true of the shape of the number: one lumped
+    "new-or-updated" count can't distinguish a genuinely new ad from one the
+    feed merely re-sent, so it silently reads as growth. Split the counts
+    (`new` vs `updated` vs `marked_inactive`), and where a zero could mean
+    breakage, make the broken case say so instead of counting to zero.
 
 ---
 
