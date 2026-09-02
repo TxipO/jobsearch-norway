@@ -234,6 +234,35 @@ def test_salary_none_when_absent():
     assert _parse_salary(None) is None
 
 
+def test_salary_parses_kr_as_a_suffix_when_lonn_anchored():
+    """Live bug, 2026-09-02: "lønn mellom 380 000 og 520 000 kr" has 'kr'
+    trailing the range, not leading it — SALARY_RE never matched, so a real
+    NAV ad with a stated salary showed a blank badge. A bare number-then-kr
+    suffix is exactly as noisy as the bare-number problem SALARY_RE already
+    guards against (measured live: 211 descriptions match with no kr-prefix
+    hit, mostly referral bonuses and student-loan write-offs) — requiring a
+    lønn/årslønn keyword within 40 chars narrows that to 85, spot-checked
+    clean."""
+    assert _parse_salary("Full stilling med lønn mellom 380 000 og 520 000 kr, avhengig av erfaring.") \
+        == "lønn mellom 380 000 og 520 000 kr"
+    assert _parse_salary("Vi tilbyr årslønn 397 000 - 494 200 kr.") == "årslønn 397 000 - 494 200 kr"
+
+
+def test_salary_suffix_still_requires_a_salary_keyword():
+    """The same bare-number noise SALARY_RE guards against, just phrased with
+    a trailing 'kr' instead of a leading one — a referral bonus or loan
+    write-off must not be mistaken for the job's own salary."""
+    assert _parse_salary("Hos oss får du 20 000 kr i sign-on bonus.") is None
+    assert _parse_salary("Inntil 60 000 kr i årlig nedskriving av studielån.") is None
+
+
+def test_salary_prefix_form_still_wins_when_both_present():
+    """SALARY_RE (prefix) is tried first — a description with both an
+    unambiguous 'kr X' figure and unrelated lønn-suffix noise must not have
+    the clean prefix match overridden by the suffix fallback."""
+    assert _parse_salary("Lønn kr 680 000. Signeringsbonus lønnes med 5000 kr.") == "kr 680 000"
+
+
 def test_salary_min_value_strips_thousand_separators():
     """Real DB samples use space, dot, and non-breaking-space as thousand
     separators inconsistently — all three must parse to the same int."""
