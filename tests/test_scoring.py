@@ -520,6 +520,17 @@ def test_feilsoking_alone_does_not_grant_it_support_bonus():
     assert bd["track_it_support"]["points"] > 0
 
 
+def test_english_troubleshooting_alone_does_not_grant_it_support_bonus():
+    """The English twin was left ungated when feilsøking was fixed — measured
+    2026-09-02: all 7 active ads with "troubleshooting" as their only
+    IT-support keyword were electrical/mechanical, and two of them were
+    user-flagged the same day for showing up in an IT list."""
+    _, bd = _score("Experienced Electricians Wanted", "Electrical troubleshooting and repair on site.")
+    assert bd["track_it_support"]["points"] == 0
+    _, bd = _score("IT Support Technician", "Troubleshooting and helpdesk duties for Windows clients.")
+    assert bd["track_it_support"]["points"] > 0
+
+
 def test_formal_qualification_penalty_non_it_degree():
     """Live case (ABB "Project Engineer - Automation", user-flagged
     2026-08-29): a degree requirement stated as its own bullet under a
