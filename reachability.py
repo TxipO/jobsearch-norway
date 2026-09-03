@@ -85,7 +85,7 @@ def _cache_key(municipal: str) -> str:
     return _STATE_PREFIX + municipal.strip().upper()
 
 
-def _geocode_municipal(conn, municipal: str) -> dict | None:
+def _geocode_municipal(municipal: str) -> dict | None:
     """Coordinates for a municipal's town centre. Uses the 'locality' or
     'address' layer result Entur's Photon-based geocoder returns for a bare
     place name — good enough for a travel-time estimate, not turn-by-turn
@@ -163,7 +163,7 @@ def get_reachability(conn, municipal: str | None) -> dict | None:
         return json.loads(cached)
 
     try:
-        coords = _geocode_municipal(conn, municipal)
+        coords = _geocode_municipal(municipal)
         if coords is None:
             result = {"error": "not_found"}
         else:

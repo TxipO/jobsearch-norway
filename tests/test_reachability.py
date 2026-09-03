@@ -27,7 +27,7 @@ def test_get_reachability_caches_result(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
     calls = {"geocode": 0, "trip": 0}
 
-    def fake_geocode(conn, municipal):
+    def fake_geocode(municipal):
         calls["geocode"] += 1
         return {"latitude": 61.0, "longitude": 6.0}
 
@@ -48,7 +48,7 @@ def test_get_reachability_caches_result(tmp_path, monkeypatch):
 
 def test_get_reachability_no_route_found(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
-    monkeypatch.setattr(rb, "_geocode_municipal", lambda conn, m: {"latitude": 61.0, "longitude": 6.0})
+    monkeypatch.setattr(rb, "_geocode_municipal", lambda m: {"latitude": 61.0, "longitude": 6.0})
     monkeypatch.setattr(rb, "_query_trip", lambda f, t: None)
 
     result = rb.get_reachability(conn, "Nowhereville")
@@ -57,7 +57,7 @@ def test_get_reachability_no_route_found(tmp_path, monkeypatch):
 
 def test_get_reachability_municipal_not_geocoded(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
-    monkeypatch.setattr(rb, "_geocode_municipal", lambda conn, m: None)
+    monkeypatch.setattr(rb, "_geocode_municipal", lambda m: None)
 
     result = rb.get_reachability(conn, "Xyzabc")
     assert result == {"error": "not_found"}
@@ -69,7 +69,7 @@ def test_get_reachability_returns_none_on_network_failure(tmp_path, monkeypatch)
     failure forever."""
     conn = _make_conn(tmp_path)
 
-    def raise_error(conn, municipal):
+    def raise_error(municipal):
         raise requests.RequestException("boom")
 
     monkeypatch.setattr(rb, "_geocode_municipal", raise_error)
