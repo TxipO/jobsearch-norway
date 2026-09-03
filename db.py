@@ -466,11 +466,6 @@ def normalize_due_date(value: str | None) -> str | None:
     return None
 
 
-def set_due_sort(conn: sqlite3.Connection, uuid: str, due_sort: str | None) -> None:
-    conn.execute("UPDATE vacancies SET application_due_sort = ? WHERE uuid = ?", (due_sort, uuid))
-    conn.commit()
-
-
 def mark_status(conn: sqlite3.Connection, uuid: str, status: str, title: str, business_name: str, municipal: str) -> None:
     conn.execute(
         """
