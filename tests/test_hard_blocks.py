@@ -566,3 +566,68 @@ def test_compound_maritime_titles_blocked():
 def test_compound_crane_operator_title_blocked():
     excluded, _ = check_exclusion("Riggmann og tårnkranfører", "")
     assert excluded
+
+
+# --- English-language ads (user-flagged queue, 2026-09-02) -----------------
+# Six of ten flagged vacancies that day were English staffing-agency ads for
+# fagbrev-gated trades. The whole title list was Norwegian-only apart from one
+# ad-hoc "instrumentation technician", so "Experienced Electricians Wanted"
+# sailed past a block that catches "elektriker". NAV carries 341 active
+# English ads, so this was a standing hole, not an edge case.
+
+def test_english_trade_titles_blocked():
+    for title in (
+        "Experienced Electricians Wanted – Bergen – Join Our Team",
+        "Plumber / Plumbing Installer - Plumbing & Heating",
+        "Experienced Carpenters Wanted – Bergen",
+        "Pipefitter / Welder in the western part of Norway",
+        "Skilled Sheet Metal Workers – Bergen",
+        "Steel Fixer / Concrete Worker / BAS",
+        "3/3 rotation - Industrial Maintenance Mechanic - long-term position",
+        "Bricklayers Wanted – Bergen – Competitive Salary",
+    ):
+        excluded, reason = check_exclusion(title, "")
+        assert excluded, title
+        assert "fagbrev" in reason
+
+
+def test_english_trade_titles_do_not_overmatch():
+    """`\bmechanic\b` must not swallow "mechanical engineer" (a different
+    category with its own rule), and the word boundary is the only thing
+    stopping it."""
+    excluded, reason = check_exclusion("Mechanical Engineer - Process Industry", "")
+    assert not excluded or "fagbrev" not in reason
+
+
+def test_english_forklift_licence_requirement_blocks():
+    """Live miss 2026-09-02: "Valid T4 forklift license" sat under the heading
+    "We are looking for someone who has:" — neither the heading nor the
+    English "valid" was recognised, so a forklift-certificate requirement read
+    as ordinary prose."""
+    body = (
+        "Experienced Forklift Driver\n"
+        "We are looking for someone who has:\n"
+        "Valid T4 forklift license\n"
+        "Previous experience operating forklifts\n"
+    )
+    excluded, reason = check_exclusion("Experienced Forklift Driver", body)
+    assert excluded
+    assert "forklift" in reason.lower() or "truckfører" in reason.lower()
+
+
+def test_trailing_preference_does_not_soften_a_hard_requirement():
+    """"Har gyldig truckførerbevis, gjerne T1-T4" requires the licence and
+    merely prefers those classes — the trailing "gjerne" used to disarm the
+    whole clause. Same scoping already applied to parenthesised qualifiers."""
+    body = "Hva vi ser etter\nHar gyldig truckførerbevis, gjerne T1-T4\nErfaring fra lager\n"
+    excluded, reason = check_exclusion("Lagermedarbeider", body)
+    assert excluded
+    assert "truckfører" in reason.lower()
+
+
+def test_leading_softener_still_wins_over_trailing_qualifier():
+    """The mirror case that must NOT flip: when the clause opens with a
+    softener, a trailing "gjerne" is irrelevant — it stays optional."""
+    body = "Kvalifikasjoner:\nDet er ønskelig at du har truckførerbevis, gjerne T1-T4\n"
+    excluded, _ = check_exclusion("Lagermedarbeider", body)
+    assert not excluded

@@ -12,7 +12,7 @@ import json
 import re
 
 from db import strip_html
-from hard_blocks import OPTIONAL_MARKER_RE, REQUIREMENT_VERB_RE, iter_requirement_clauses
+from hard_blocks import REQUIREMENT_VERB_RE, has_optional_marker, iter_requirement_clauses
 
 # --- Track A: IT-support / helpdesk / servicedesk --------------------------
 # Backed by 3+ years of real experience (Verna, PUMB, freelance repair).
@@ -273,7 +273,7 @@ def _has_unmet_car_requirement(text: str) -> bool:
     for clause, in_required_section in iter_requirement_clauses(text):
         if not any(kw in clause for kw in CAR_REQUIRED_KEYWORDS):
             continue
-        if OPTIONAL_MARKER_RE.search(clause):
+        if has_optional_marker(clause):
             continue
         if REQUIREMENT_VERB_RE.search(clause) or in_required_section:
             return True
@@ -437,7 +437,7 @@ def _has_unmet_formal_qualification(text: str) -> bool:
             continue
         if FORMAL_QUALIFICATION_IT_FIELD_RE.search(clause):
             continue
-        if OPTIONAL_MARKER_RE.search(clause):
+        if has_optional_marker(clause):
             continue
         if REQUIREMENT_VERB_RE.search(clause) or in_required_section:
             return True
@@ -446,7 +446,7 @@ def _has_unmet_formal_qualification(text: str) -> bool:
 
 def _has_programming_experience_requirement(text: str) -> bool:
     for clause, _ in iter_requirement_clauses(text):
-        if PROGRAMMING_EXPERIENCE_RE.search(clause) and not OPTIONAL_MARKER_RE.search(clause):
+        if PROGRAMMING_EXPERIENCE_RE.search(clause) and not has_optional_marker(clause):
             return True
     return False
 
@@ -513,7 +513,13 @@ def score_vacancy(
     # the ONLY IT-support keyword present, almost all mechanical/industrial
     # titles (Testingeniør, Industrimekaniker, boat/train mechanics...).
     # Only counts when at least one other IT-support keyword is also there.
-    if it_kw == ["feilsøking"]:
+    # Same for its English twin, which was left ungated when feilsøking was
+    # fixed — measured 2026-09-02: 7 active ads had "troubleshooting" as
+    # their only IT-support keyword, and all 7 were electrical/mechanical
+    # (Electricians ×2, Industrial Maintenance Mechanic, Sheet Metal
+    # Workers, Hardware Test Engineer, power systems, a camper-rental
+    # manager). Two of them were user-flagged the same day.
+    if it_kw in (["feilsøking"], ["troubleshooting"], ["feilsøking", "troubleshooting"]):
         it_hits, it_kw = 0, []
     it_score = min(it_hits * 8, 40)
     breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}

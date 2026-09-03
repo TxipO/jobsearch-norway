@@ -133,6 +133,22 @@ TRADE_TITLE_PATTERNS = [
     r"\bautomatiker", r"\bautomatikar", r"\bindustrimekaniker", r"\bindustrimekanikar",
     r"\binstrumenttekniker", r"\binstrumentation technician", r"\bcnc\b",
     r"\bplatearbeider", r"\bplatearbeidar", r"\bindustrirørlegger",
+    # English titles for the same fagbrev-gated trades. NAV carries genuinely
+    # English-language ads (341 active as of 2026-09-02) and this whole list
+    # was Norwegian-only apart from one ad-hoc "instrumentation technician" —
+    # so a staffing agency advertising "Experienced Electricians Wanted" in
+    # English sailed straight past a block that catches "elektriker".
+    # Six of ten user-flagged vacancies on 2026-09-02 were exactly this.
+    # Measured against every active title before adding: 25 newly-blocked,
+    # every one manually checked and genuine (incl. one Norwegian-body ad
+    # titled "Harrison Ford was a carpenter just like you!" whose body asks
+    # for tømrere). Matched on title regardless of detected language on
+    # purpose — langdetect tags short English titles like "Electrician" and
+    # "Mechanic" as Norwegian, so gating on language would reopen the hole.
+    # "mason" was measured too and dropped: it added no hits of its own and
+    # risks matching the personal name.
+    r"electrician", r"\bplumber", r"\bcarpenter", r"\bwelder\b",
+    r"sheet metal work", r"steel fixer", r"\bmechanic\b", r"\bbricklayer",
 ]
 
 # Named engineering disciplines requiring a bachelor's/master's degree in
@@ -358,6 +374,11 @@ REQUIREMENT_HEADING_RE = re.compile(
     r"education\s*(?:&|and)\s*experience|"
     r"what we(?:'re| are) looking for|what we expect|who you are|"
     r"required qualifications|minimum qualifications|"
+    # "We are looking for someone who has:" — the long form of the heading
+    # right above it. Live miss 2026-09-02: an English forklift ad listed
+    # "Valid T4 forklift license" under exactly this line, so the licence
+    # requirement read as unsectioned prose and the ad stayed visible.
+    r"we are looking for someone who(?:\s+\w+)*|"
     r"skills?\s*(?:&|and)\s*experience)\s*[:–-]*$"
 )
 OPTIONAL_HEADING_RE = re.compile(
@@ -407,7 +428,12 @@ def iter_requirement_clauses(body_l: str):
 REQUIREMENT_VERB_RE = re.compile(
     r"må ha|må kunne|\bkrav\b|kreves|krever|krevast|\btrenger\b|"
     r"\bhar du\b|\bdu har\b|\bsom har\b|\bgyldig|innehar|"
-    r"\bis required\b|\bare required\b|\bmust have\b|\bmust hold\b|\brequired\b"
+    r"\bis required\b|\bare required\b|\bmust have\b|\bmust hold\b|\brequired\b|"
+    # English twin of "gyldig" above — "Valid T4 forklift license" states a
+    # hard requirement on its own, with or without a recognised heading over
+    # it (live miss 2026-09-02). Safe as a bare word here because a verb only
+    # matters in a clause that already contains a specific mention pattern.
+    r"\bvalid\b"
 )
 # A softener anywhere in the clause wins even under a requirements heading
 # ("Kvalifikasjoner: ... truckførerbevis er en fordel, men ikke et krav" —
@@ -432,6 +458,28 @@ OPTIONAL_MARKER_RE = re.compile(
 )
 _PARENS_RE = re.compile(r"\([^)]*\)")
 
+# A qualifier hanging off the END of a requirement softens the detail it
+# names, not the requirement itself: "har gyldig truckførerbevis, gjerne
+# T1--T4" requires the licence and merely prefers those classes, and
+# "førerkort klasse B er et absolutt krav, gjerne BE" says so outright.
+# Same reasoning that already scopes OPTIONAL_MARKER_RE outside parentheses
+# below ("Truckførerbevis T8 (T8.4 er en fordel)") — this generalises it to
+# the comma form. Deliberately narrow: only strips when the trailing segment
+# *opens* with a bare preference adverb, so a clause that was soft from the
+# start ("det er ønskelig at du har erfaring, gjerne fra motebransjen")
+# keeps its leading softener and stays soft.
+_TRAILING_QUALIFIER_RE = re.compile(r",\s*(?:gjerne|helst|fortrinnsvis|ideelt sett|primært)\b.*$")
+
+
+def has_optional_marker(clause: str) -> bool:
+    """Is this clause softened as a whole? Ignores softeners that only
+    qualify a trailing or parenthesised detail. Shared by every soft/hard
+    decision (hard_blocks' truckfør/forklift checks and scoring.py's
+    car/formal-qualification/programming checks) so the scoping rule can't
+    drift between them — it used to live inline in one of the five."""
+    scoped = _TRAILING_QUALIFIER_RE.sub("", _PARENS_RE.sub(" ", clause))
+    return bool(OPTIONAL_MARKER_RE.search(scoped))
+
 
 def _has_unmet_requirement(mention_re, clauses, training_re=None, title_l=None):
     """Shared verdict logic for "does `mention_re` show up as a firm, unmet
@@ -452,11 +500,7 @@ def _has_unmet_requirement(mention_re, clauses, training_re=None, title_l=None):
         clause, in_required_section = clauses[i]
         if _training_offered_near(i):
             continue
-        # Scoped OUTSIDE parentheses: "Truckførerbevis T8 (T8.4 er en
-        # fordel men ikke et krav)" means T8 itself IS required — only the
-        # more advanced T8.4 sub-class is optional (live case: CargoNet,
-        # user-flagged 2026-08-29).
-        if OPTIONAL_MARKER_RE.search(_PARENS_RE.sub(" ", clause)):
+        if has_optional_marker(clause):
             continue
         if REQUIREMENT_VERB_RE.search(clause) or in_required_section:
             return True
