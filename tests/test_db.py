@@ -215,6 +215,49 @@ def test_only_new_and_interesting_shown_by_default(tmp_path):
         assert filtered == {f"v-{status}"}
 
 
+def test_search_ignores_the_default_status_restriction_except_archived(tmp_path):
+    """User-requested 2026-09-03: the plain-listing default above (only
+    "new"/"interesting") must NOT apply to a search — a search is a
+    deliberate lookup, and the user could not find a vacancy they had
+    already applied to by searching its name. Search looks across every
+    status except "archived" ("Смітник" — those rows are meant to be gone
+    outright)."""
+    conn = _make_conn(tmp_path)
+    for status in ("new", "interesting", "applied", "interview", "offer", "rejected", "ignored"):
+        _insert_vacancy(conn, f"v-{status}", title=f"Findable Corp {status}")
+        db.set_user_status(conn, f"v-{status}", status)
+    _insert_vacancy(conn, "v-archived", title="Findable Corp archived")
+    db.set_user_status(conn, "v-archived", "archived")
+
+    found = {r["uuid"] for r in db.list_vacancies(conn, search="Findable")}
+    assert found == {
+        "v-new", "v-interesting", "v-applied", "v-interview", "v-offer", "v-rejected", "v-ignored",
+    }
+    assert db.count_vacancies(conn, search="Findable") == 7
+
+    # Explicit status filter still wins over the search-wide default.
+    only_applied = {r["uuid"] for r in db.list_vacancies(conn, search="Findable", user_status="applied")}
+    assert only_applied == {"v-applied"}
+
+    # ...and archived is reachable by name only through its own explicit filter.
+    only_archived = {r["uuid"] for r in db.list_vacancies(conn, search="Findable", user_status="archived")}
+    assert only_archived == {"v-archived"}
+
+
+def test_search_is_space_and_case_insensitive(tmp_path):
+    """Live report 2026-09-03: searching "Supermicro" (one word) found
+    nothing for a vacancy whose employer name is "Super Micro Computer" —
+    exactly as the source wrote it, with spaces. Space/case differences on
+    either side of the query must not matter."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "v1", title="Service Engineer", business_name="Super Micro Computer")
+    db.set_user_status(conn, "v1", "new")
+
+    for query in ("Supermicro", "SUPERMICRO", "super  micro", "MicroComputer", "micro computer"):
+        found = {r["uuid"] for r in db.list_vacancies(conn, search=query)}
+        assert found == {"v1"}, f"query {query!r} should find v1"
+
+
 def test_active_only_still_hides_interesting_and_new_when_inactive(tmp_path):
     conn = _make_conn(tmp_path)
     _insert_vacancy(conn, "inactive-interesting", status="INACTIVE")

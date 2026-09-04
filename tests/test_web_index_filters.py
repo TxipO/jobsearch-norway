@@ -144,19 +144,36 @@ def test_applied_vacancy_hidden_from_default_listing_but_survives_a_closed_sourc
     assert "closed-but-applied-default" in _render(conn, user_status=["applied"])
 
 
-def test_applied_vacancy_hidden_from_default_search_but_findable_when_filtered(tmp_path, monkeypatch):
-    """Same supersession as above, for search specifically: a plain
-    zero-filter search no longer surfaces applied vacancies, but adding the
-    "Відгукнувся" filter still finds it even after the source closes the
-    listing (the original 2026-08-16 guarantee)."""
+def test_applied_vacancy_findable_by_search_even_though_hidden_from_default_listing(tmp_path, monkeypatch):
+    """Live report 2026-09-03: the user could not find a vacancy they had
+    already applied to ("Super Micro Computer") by searching its name — the
+    2026-09-02 default-status restriction applied to search too, so a
+    deliberate lookup was silently narrowed the same as passive browsing.
+    User-requested fix: search always looks across every status (still
+    excluding "Смітник" — see the next test), independent of the plain-
+    listing default; the 2026-08-16 always-findable-after-closing guarantee
+    now holds for a bare search with zero status filters, not just an
+    explicit "Відгукнувся" filter."""
     conn = _setup(tmp_path, monkeypatch)
     _insert(conn, "closed-but-applied-search", title="Senior IT-konsulent Alstahaug")
     db.set_user_status(conn, "closed-but-applied-search", "applied")
     scoring.rescore_all(conn)
     _close_listing(conn, "closed-but-applied-search")
 
-    assert "closed-but-applied-search" not in _render(conn, q="Alstahaug")
-    assert "closed-but-applied-search" in _render(conn, q="Alstahaug", user_status=["applied"])
+    assert "closed-but-applied-search" in _render(conn, q="Alstahaug")
+
+
+def test_archived_vacancy_still_excluded_from_search(tmp_path, monkeypatch):
+    """The one status search does NOT reach into by default — "Смітник" rows
+    are meant to be gone outright (delete_archived() removes them on the next
+    sync); this only matters in the narrow window before that runs."""
+    conn = _setup(tmp_path, monkeypatch)
+    _insert(conn, "trashed-searchable", title="Senior IT-konsulent Alstahaug")
+    db.set_user_status(conn, "trashed-searchable", "archived")
+    scoring.rescore_all(conn)
+
+    assert "trashed-searchable" not in _render(conn, q="Alstahaug")
+    assert "trashed-searchable" in _render(conn, q="Alstahaug", user_status=["archived"])
 
 
 def test_interesting_vacancy_still_hidden_by_default_after_listing_closes(tmp_path, monkeypatch):
