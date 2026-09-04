@@ -644,16 +644,27 @@ def _vacancy_filters(
         if statuses:
             clauses.append(f"user_status IN ({', '.join('?' for _ in statuses)})")
             params.extend(statuses)
+    elif search:
+        # User-requested 2026-09-03: a search is a deliberate lookup, not
+        # passive browsing — the new/interesting-only default (below) hid a
+        # vacancy the user had already marked "Відгукнувся" from its own
+        # search hit. Search ignores that default and looks across every
+        # status except "archived" ("Смітник"): those rows are meant to be
+        # gone (delete_archived() removes them outright on the next sync;
+        # this only matters in the narrow window before that runs). An
+        # explicit status filter (the branch above) still wins over this —
+        # ticking exactly "Відгукнувся" while searching narrows to that.
+        clauses.append("user_status != 'archived'")
     else:
-        # No explicit status picked (the default/unfiltered main-list view)
-        # — user-requested 2026-09-02: the default view is the open backlog
-        # only ("new"/"interesting"), everything already reacted to
-        # (applied/interview/offer/rejected/ignored/archived) clutters it.
-        # Widened from an earlier rejected/ignored-only version (2026-08-23)
-        # to an explicit allowlist — still one filter-panel click away, not
-        # gone. Only reachable when user_status is the empty/falsy default —
-        # kanban always passes an explicit single status, so this never
-        # affects its columns.
+        # No explicit status picked AND no search — the default/unfiltered
+        # main-list view — user-requested 2026-09-02: the default view is
+        # the open backlog only ("new"/"interesting"), everything already
+        # reacted to (applied/interview/offer/rejected/ignored/archived)
+        # clutters it. Widened from an earlier rejected/ignored-only version
+        # (2026-08-23) to an explicit allowlist — still one filter-panel
+        # click away, not gone. Only reachable when user_status is the
+        # empty/falsy default — kanban always passes an explicit single
+        # status, so this never affects its columns.
         clauses.append("user_status IN ('new', 'interesting')")
     if language:
         clauses.append("language = ?")
@@ -662,8 +673,21 @@ def _vacancy_filters(
         clauses.append("source = ?")
         params.append(source)
     if search:
-        clauses.append("(title LIKE ? OR description LIKE ? OR business_name LIKE ?)")
-        like = f"%{search}%"
+        # Space- and case-insensitive on both sides: user-reported 2026-09-03
+        # — "Supermicro" (one word) didn't find "Super Micro Computer" (the
+        # employer name exactly as LinkedIn wrote it) because a plain LIKE
+        # substring match is literal about whitespace. SQLite's LIKE is
+        # already case-insensitive for ASCII, but not diacritics (æøå) —
+        # LOWER() alone doesn't fold those either, so this covers case the
+        # same way for both scripts rather than relying on the ASCII-only
+        # default. Stripping spaces on both sides means "super micro" and
+        # "supermicro" become the same query against the same normalized
+        # column, regardless of which one either side used.
+        norm = "REPLACE(LOWER({col}), ' ', '')"
+        clauses.append(
+            "(" + " OR ".join(norm.format(col=c) + " LIKE ?" for c in ("title", "description", "business_name")) + ")"
+        )
+        like = f"%{search.lower().replace(' ', '')}%"
         params.extend([like, like, like])
     if min_score is not None:
         clauses.append(f"{_score_column(score_profile)} >= ?")
