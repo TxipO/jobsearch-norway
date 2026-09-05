@@ -807,8 +807,17 @@ def list_vacancies(
 def count_new_high_score(conn: sqlite3.Connection, since: str, min_score: int) -> int:
     """Vacancies first seen after `since` (the previous sync's completion
     timestamp) scoring at least min_score — used for the post-sync "N new
-    high-score matches" summary. Excludes hard-blocked rows, same as the
-    default list view.
+    high-score matches" summary. Excludes hard-blocked rows and anything not
+    "new"/"interesting", same as the default list view (2026-09-02).
+
+    That user_status check matters here specifically: a row can go from
+    first-seen to "applied" between two syncs (a concurrent session logging
+    an application — see jobsearch-norway-sources memory) without the user
+    ever opening this app in between. Live report 2026-09-05: the banner
+    said "1 нових вакансій з високим скором!" for a vacancy a parallel
+    session had already applied to 4 hours earlier — the count wasn't
+    checking the same visibility the list right below it enforces, so the
+    banner pointed at a row that was never going to be there.
 
     `since` MUST be a UTC timestamp in the same "YYYY-MM-DD HH:MM:SS" shape
     as first_seen_at (written by SQLite's datetime('now'), which is UTC) —
@@ -816,7 +825,8 @@ def count_new_high_score(conn: sqlite3.Connection, since: str, min_score: int) -
     many hours local time leads UTC by."""
     return conn.execute(
         "SELECT COUNT(*) FROM vacancies "
-        "WHERE first_seen_at > ? AND score >= ? AND status = 'ACTIVE' AND excluded = 0",
+        "WHERE first_seen_at > ? AND score >= ? AND status = 'ACTIVE' AND excluded = 0 "
+        "AND user_status IN ('new', 'interesting')",
         (since, min_score),
     ).fetchone()[0]
 

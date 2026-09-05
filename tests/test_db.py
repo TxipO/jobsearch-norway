@@ -793,6 +793,25 @@ def test_count_new_high_score_only_counts_after_watermark(tmp_path):
     assert db.count_new_high_score(conn, since="2025-01-01 00:00:00", min_score=55) == 1
 
 
+def test_count_new_high_score_excludes_already_actioned_rows(tmp_path):
+    """Live report 2026-09-05: the banner said "1 нових вакансій з високим
+    скором!" for a vacancy a concurrent session had already applied to
+    between two syncs — the count didn't check the same new/interesting-only
+    visibility the default list enforces (2026-09-02), so it pointed at a
+    row the user could never actually find under the banner."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "high-but-applied")
+    db.set_score(conn, "high-but-applied", 80, {})
+    db.set_user_status(conn, "high-but-applied", "applied")
+    _insert_vacancy(conn, "high-and-new")
+    db.set_score(conn, "high-and-new", 80, {})
+    _insert_vacancy(conn, "high-and-interesting")
+    db.set_score(conn, "high-and-interesting", 80, {})
+    db.set_user_status(conn, "high-and-interesting", "interesting")
+
+    assert db.count_new_high_score(conn, since="2020-01-01 00:00:00", min_score=55) == 2
+
+
 def test_rows_needing_full_description_retries_after_cooldown(tmp_path):
     conn = _make_conn(tmp_path)
     _insert_vacancy(conn, "tried-long-ago", description="short", source="jobbnorge")
