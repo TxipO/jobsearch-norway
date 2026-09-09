@@ -284,7 +284,16 @@ def fetch_linkedin_preview(url: str) -> dict:
     m = re.search(r'<meta property="og:title" content="([^"]*)"', resp.text)
     if not m:
         raise ValueError("Не знайшов og:title на цій сторінці — це точно посилання на вакансію LinkedIn?")
-    og_title = html.unescape(m.group(1))
+    # LinkedIn double-escapes entities in this tag for names with "&" (e.g.
+    # "A&O IT Group" -> "&amp;amp;O" in the raw HTML) — a single unescape()
+    # only peels one layer, leaving a literal "&amp;O" in business_name.
+    # Loop to a fixed point instead of guessing how many layers deep it goes.
+    og_title = m.group(1)
+    for _ in range(3):
+        unescaped = html.unescape(og_title)
+        if unescaped == og_title:
+            break
+        og_title = unescaped
     parsed = LINKEDIN_OG_TITLE_RE.match(og_title)
     if not parsed:
         return {"title": og_title, "business_name": "", "municipal": "", "county": ""}
