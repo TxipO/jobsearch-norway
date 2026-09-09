@@ -324,7 +324,18 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
     COALESCE, that would silently wipe out a borrowed description
     (scoring._dedup_key cross-ref against NAV/Jobbnorge) on the very next
     sync — same failure shape as the jobbnorge full-description-backfill
-    bug fixed 2026-07-17, just for a different field-population path."""
+    bug fixed 2026-07-17, just for a different field-population path.
+
+    business_name/municipal/county/employer_name get the same COALESCE
+    treatment (2026-09-09) — same failure shape again, this time via the
+    manual "+ Додати вакансію" web form: LinkedIn's public og:title format
+    isn't guaranteed (it varies per posting/experiment), and when a caller's
+    parse comes back empty for these fields, an unguarded upsert on an
+    already-tracked uuid (LinkedIn job ids are stable, so re-adding the same
+    link always hits ON CONFLICT) silently nulled out a row's employer and
+    location — killing scoring.location_bonus with no warning. Verified
+    live: a fully-populated A&O IT Group / Oslo row lost both fields this
+    way within minutes of being added correctly."""
     language = detect_language(row.get("description"))
     conn.execute(
         """
@@ -336,11 +347,11 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
         ON CONFLICT(uuid) DO UPDATE SET
             status = excluded.status,
             title = excluded.title,
-            business_name = excluded.business_name,
-            municipal = excluded.municipal,
-            county = excluded.county,
+            business_name = COALESCE(excluded.business_name, business_name),
+            municipal = COALESCE(excluded.municipal, municipal),
+            county = COALESCE(excluded.county, county),
             description = COALESCE(excluded.description, description),
-            employer_name = excluded.employer_name,
+            employer_name = COALESCE(excluded.employer_name, employer_name),
             application_url = excluded.application_url,
             application_due = excluded.application_due,
             application_due_sort = excluded.application_due_sort,
