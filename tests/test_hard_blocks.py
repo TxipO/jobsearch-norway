@@ -264,6 +264,37 @@ def test_enkelte_stillinger_boilerplate_still_not_blocked_for_autorisasjon():
     assert not excluded
 
 
+def test_security_clearance_named_level_blocked():
+    """Live gap found 2026-09-21: a NAMED clearance level after
+    "sikkerhetsklarering" (rather than one of the specific verb phrasings
+    from the 2026-07-18/2026-08-15 rounds) slipped through — e.g.
+    Skatteetaten's "du må inneha eller kvalifisere til sikkerhetsklarering
+    på nivå hemmelig". Audit of 10,534 active ads found 12 such cases
+    (Nordland fylkeskommune, PST, Utenriksdepartementet, Statens
+    havarikommisjon, Skatteetaten among them), all genuine requirements."""
+    bodies = [
+        "Du må inneha eller kvalifisere til sikkerhetsklarering på nivå Hemmelig.",
+        "For ansettelse i stillingen må sikkerhetsklarering på nivå HEMMELIG påregnes.",
+        "Videre må du tilfredsstille kravene til sikkerhetsklarering for "
+        "STRENGT HEMMELIG og NATO SECRET.",
+    ]
+    for body in bodies:
+        excluded, reason = check_exclusion("Systemutvikler", body)
+        assert excluded, body
+        assert "sikkerhetsklarering" in reason, body
+
+
+def test_security_clearance_named_level_generic_disclaimer_not_blocked():
+    """The "enkelte stillinger" guard has to cover the 2026-09-21 named-level
+    alternative too — an employer-wide disclaimer naming a level is still
+    not a requirement of this particular job."""
+    excluded, _ = check_exclusion(
+        "Systemutvikler",
+        "Enkelte stillinger vil kunne kreve sikkerhetsklarering på nivå hemmelig.",
+    )
+    assert not excluded
+
+
 def test_eu_passport_requirement_blocked():
     """Live case 2026-08-15, user-flagged: "Norwegian speaker? Kick-start
     your international career in Greece!" (Jobs By Nordics AB) — a BPO

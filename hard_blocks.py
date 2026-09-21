@@ -291,12 +291,33 @@ BODY_AUTHORISATION_PATTERNS = [
 # 28 more live ads (Sjøforsvaret, three politidistrikt, Kartverket, NAV
 # Teknologi, a second Brønnøysundregistrene posting) with no false positives
 # in the audit — the "enkelte stillinger" guard below covers both halves.
+#
+# Third round of this same category, 2026-09-21 (after 2026-07-18 and
+# 2026-08-15 above). Live case: Skatteetaten's "du må inneha eller
+# kvalifisere til sikkerhetsklarering på nivå hemmelig" slipped through.
+# Both earlier rounds each added only the ONE verb phrasing that had just
+# been caught missing ("sikkerhetsklareres", then "autoriseres etter
+# sikkerhetsloven"), which is exactly why a third phrasing showed up —
+# the regex was chasing verbs one at a time. This round keys on the NAMED
+# CLEARANCE LEVEL after "sikkerhetsklarering" instead, since that's the
+# actually reliable signal: a generic employer disclaimer never names a
+# level, only a real per-position requirement does. Also add a narrow verb
+# form ("inneha"/"kvalifisere til/for sikkerhetsklarering") for phrasings
+# that don't name a level at all. A read-only audit of 10,534 active ads
+# found 12 new matches, 8 of them visible/unblocked before this change, all
+# genuine requirements — Nordland fylkeskommune, PST, Utenriksdepartementet,
+# Statens havarikommisjon, Skatteetaten — and zero false positives; the
+# "enkelte stillinger" guard below still applies to these two alternatives
+# same as every other one.
 SECURITY_CLEARANCE_RE = re.compile(
     r"(må kunne sikkerhetsklareres|krav(?:er)? (?:om|til) sikkerhetsklarering|"
     r"vilkår for sikkerhetsklarering|kreve(?:r)? sikkerhetsklarering|"
     r"autoriseres for (?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
     r"klareres for (?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
-    r"autorisasjon etter sikkerhetsloven|autoriseres etter sikkerhetsloven)"
+    r"autorisasjon etter sikkerhetsloven|autoriseres etter sikkerhetsloven|"
+    r"sikkerhetsklarering (?:på|til|for) (?:nivå )?"
+    r"(?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
+    r"(?:inneha|kvalifisere (?:til|for)) sikkerhetsklarering)"
 )
 
 
