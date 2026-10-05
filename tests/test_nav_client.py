@@ -149,7 +149,9 @@ def test_new_entries_on_the_tip_page_are_picked_up(tmp_path, monkeypatch):
 
     second = nav_client.sync(conn)
     assert second["new"] == 1, "a new ad appended to the tip page must be seen"
-    assert second["updated"] == 1
+    # "a" was re-sent byte-identical, so it is "unchanged", not "updated"
+    # (2026-10-05: idle syncs used to report updated=N forever).
+    assert second["updated"] == 0 and second["unchanged"] == 1
     assert {r[0] for r in conn.execute("SELECT uuid FROM vacancies")} == {"a", "b"}
 
 
@@ -185,4 +187,205 @@ def test_new_and_updated_are_counted_separately(tmp_path, monkeypatch):
 
     pages["p1"]["items"] = [_entry("a"), _entry("b"), _entry("c")]
     second = nav_client.sync(conn)
-    assert (second["new"], second["updated"]) == (1, 2)
+    assert (second["new"], second["updated"], second["unchanged"]) == (1, 0, 2)
+
+
+def test_idle_sync_reports_unchanged_not_updated(tmp_path, monkeypatch):
+    """2026-10-05: the tip page is re-read every sync, so an idle day used to
+    print updated=N forever. Only a real content change counts as updated."""
+    pages = {"p1": {"items": [_entry("a")], "etag": "tip"}}
+    _install_feed(monkeypatch, pages)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+    nav_client.sync(conn)
+
+    idle = nav_client.sync(conn)
+    assert (idle["new"], idle["updated"], idle["unchanged"]) == (0, 0, 1)
+
+    # Same uuid, different content on the feedentry endpoint -> updated.
+    def changed_get(url, headers=None, timeout=None):
+        if "/feedentry/" in url:
+            return _Resp(200, {"ad_content": {"title": "Ad v2", "description": "d"}})
+        return _Resp(200, {"id": "p1", "items": [_entry("a")], "next_id": None})
+    monkeypatch.setattr(nav_client.requests, "get", changed_get)
+    changed = nav_client.sync(conn)
+    assert (changed["updated"], changed["unchanged"]) == (1, 0)
+
+
+def _install_flaky_feed(monkeypatch, pages, failing, exc_factory):
+    """Like _install_feed, but detail fetches for uuids in `failing` raise."""
+    def fake_get(url, headers=None, timeout=None):
+        if "/feedentry/" in url:
+            uuid = url.rsplit("/", 1)[-1]
+            if uuid in failing:
+                raise exc_factory()
+            return _Resp(200, {"ad_content": {"title": "Ad " + uuid, "description": "d"}})
+        page_id = url.rsplit("/", 1)[-1]
+        page = pages[page_id]
+        return _Resp(200, {"id": page_id, "items": page["items"], "next_id": page.get("next_id")})
+
+    monkeypatch.setattr(nav_client.requests, "get", fake_get)
+    monkeypatch.setattr(nav_client, "get_token", lambda: "tok")
+
+
+def test_transient_detail_failure_holds_the_cursor_on_that_page(tmp_path, monkeypatch):
+    """Reproduced 2026-10-05: a transient detail-fetch error only bumped
+    detail_missing, then the cursor advanced past the sealed page and the ad
+    was lost forever. The cursor must stay on the page so the next sync
+    retries it, and the failure must be visible in stats."""
+    pages = {
+        "p1": {"items": [_entry("a"), _entry("b")], "next_id": "p2"},
+        "p2": {"items": [_entry("c")], "etag": "tip"},
+    }
+    failing = {"b"}
+    _install_flaky_feed(monkeypatch, pages, failing, lambda: nav_client.requests.ConnectionError("boom"))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    stats = nav_client.sync(conn)
+
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+    assert stats["detail_errors"] == 1
+    assert stats["pages"] == 1, "must not walk past the failed page"
+    assert {r[0] for r in conn.execute("SELECT uuid FROM vacancies")} == {"a"}
+
+    # Network recovers: the retry picks up b and walks on to the tip.
+    failing.clear()
+    stats = nav_client.sync(conn)
+    assert stats["detail_errors"] == 0
+    assert {r[0] for r in conn.execute("SELECT uuid FROM vacancies")} == {"a", "b", "c"}
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def test_permanent_4xx_detail_error_does_not_wedge_the_cursor(tmp_path, monkeypatch):
+    """A withdrawn ad answers 404 forever; holding the cursor for it would
+    stall the feed permanently. Only transient errors hold the cursor."""
+    pages = {
+        "p1": {"items": [_entry("a")], "next_id": "p2"},
+        "p2": {"items": [_entry("c")], "etag": "tip"},
+    }
+
+    def gone():
+        resp = nav_client.requests.Response()
+        resp.status_code = 404
+        return nav_client.requests.HTTPError("404", response=resp)
+
+    _install_flaky_feed(monkeypatch, pages, {"a"}, gone)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    stats = nav_client.sync(conn)
+
+    assert stats["detail_missing"] == 1 and stats["detail_errors"] == 0
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def test_detail_without_content_is_a_skip_and_the_cursor_advances(tmp_path, monkeypatch):
+    pages = {
+        "p1": {"items": [_entry("a")], "next_id": "p2"},
+        "p2": {"items": [], "etag": "tip"},
+    }
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/feedentry/" in url:
+            return _Resp(200, {"ad_content": None})
+        page_id = url.rsplit("/", 1)[-1]
+        return _Resp(200, {"id": page_id, "items": pages[page_id]["items"],
+                           "next_id": pages[page_id].get("next_id")})
+
+    monkeypatch.setattr(nav_client.requests, "get", fake_get)
+    monkeypatch.setattr(nav_client, "get_token", lambda: "tok")
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    stats = nav_client.sync(conn)
+
+    assert stats["detail_missing"] == 1 and stats["detail_errors"] == 0
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def test_inactive_entry_with_missing_keys_does_not_wedge_the_cursor(tmp_path, monkeypatch):
+    """An INACTIVE feed entry lacking title/businessName/municipal used to
+    raise KeyError before the cursor moved — wedged forever."""
+    bare = {"_feed_entry": {"uuid": "x", "status": "INACTIVE"}}
+    pages = {
+        "p1": {"items": [bare], "next_id": "p2"},
+        "p2": {"items": [], "etag": "tip"},
+    }
+    _install_feed(monkeypatch, pages)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    stats = nav_client.sync(conn)
+
+    assert stats["marked_inactive"] == 1
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def _flaky_two_pages(monkeypatch, failing, exc_factory):
+    pages = {
+        "p1": {"items": [_entry("a"), _entry("b")], "next_id": "p2"},
+        "p2": {"items": [_entry("c")], "etag": "tip"},
+    }
+    _install_flaky_feed(monkeypatch, pages, failing, exc_factory)
+
+
+def test_persistently_failing_ad_holds_cursor_three_syncs_then_advances(tmp_path, monkeypatch):
+    """Review 2026-10-05: with no retry cap one ad that always 5xx-ed held
+    the cursor on its page forever (2026-08-31 stall shape)."""
+    failing = {"b"}
+    _flaky_two_pages(monkeypatch, failing, lambda: nav_client.requests.ConnectionError("boom"))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    for n in (1, 2, 3):
+        stats = nav_client.sync(conn)
+        assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1", f"sync {n} must hold"
+        assert stats["detail_errors"] == 1 and stats["detail_missing"] == 0
+
+    stats = nav_client.sync(conn)
+    assert stats["detail_missing"] == 1 and stats["detail_errors"] == 0
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+    assert {r[0] for r in conn.execute("SELECT uuid FROM vacancies")} == {"a", "c"}
+    # Passing the page prunes the counter.
+    assert "b" not in __import__("json").loads(db.get_state(conn, nav_client.FAILURES_KEY))
+
+
+def test_invalid_json_detail_body_is_transient_but_capped(tmp_path, monkeypatch):
+    import json
+    failing = {"b"}
+    _flaky_two_pages(monkeypatch, failing, lambda: json.JSONDecodeError("bad", "", 0))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    first = nav_client.sync(conn)
+    assert first["detail_errors"] == 1
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+    for _ in range(2):
+        nav_client.sync(conn)
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+    last = nav_client.sync(conn)
+    assert last["detail_missing"] == 1
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def test_recovery_clears_the_failure_counter(tmp_path, monkeypatch):
+    import json
+    failing = {"b"}
+    _flaky_two_pages(monkeypatch, failing, lambda: nav_client.requests.ConnectionError("boom"))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    nav_client.sync(conn)
+    nav_client.sync(conn)
+    assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY)) == {"b": 2}
+
+    failing.clear()
+    nav_client.sync(conn)
+    assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY)) == {}
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+    # A later, separate outage starts counting from zero again.
+    failing.add("c")
+    nav_client.sync(conn)
+    assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY)) == {"c": 1}

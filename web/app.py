@@ -5,12 +5,13 @@ import sys
 import uuid as uuid_module
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import requests
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -91,6 +92,73 @@ def format_due(value: str | None) -> str | None:
 
 
 templates.env.filters["format_due"] = format_due
+
+
+# --- Local-only guard: DNS-rebinding + cross-site POST (fullreview deep, 2026-10-05) ---
+# The app has no auth — it relies on being reachable only from the user's own
+# browser on 127.0.0.1. Two ways a random website could still drive it:
+#   * cross-site <form method=post action="http://127.0.0.1:8000/sync"> (or
+#     /vacancy/{uuid}/status, /flag, /notes, /vacancy/add) — browsers send
+#     these happily, the user never sees it;
+#   * DNS rebinding — attacker.example re-resolves to 127.0.0.1, then the
+#     page is "same-origin" to the attacker's own hostname.
+# (a) Host allowlist kills rebinding; (b) Origin/Referer must equal our own
+# origin on state-changing methods kills cross-site POSTs. No Origin AND no
+# Referer (curl, sync CLI, Starlette TestClient defaults) is allowed: browsers
+# always attach one of them to cross-site POSTs, so absence means non-browser.
+ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "testserver"}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _origin_of(url_value: str) -> str | None:
+    parsed = urlparse(url_value)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}".lower()
+
+
+@app.middleware("http")
+async def local_only_guard(request: Request, call_next):
+    host_header = request.headers.get("host", "")
+    # urlparse handles "host:port" and "[::1]:port" uniformly.
+    hostname = (urlparse(f"//{host_header}").hostname or "").lower()
+    if hostname not in ALLOWED_HOSTNAMES:
+        return JSONResponse({"detail": "Bad Host header"}, status_code=400)
+    if request.method not in SAFE_METHODS:
+        claimed = request.headers.get("origin")
+        if claimed is None:
+            referer = request.headers.get("referer")
+            claimed = (_origin_of(referer) or referer) if referer else None
+        if claimed is not None:
+            own = f"{request.url.scheme}://{host_header}".lower()
+            # Origin "null" (sandboxed/cross-origin redirect) lands here too
+            # and is rejected — correct, it's never our own page.
+            if claimed.lower() != own:
+                return JSONResponse({"detail": "Cross-origin request blocked"}, status_code=403)
+    return await call_next(request)
+
+
+_URL_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):")
+SAFE_URL_SCHEMES = {"http", "https", "mailto"}
+
+
+def safe_url(value: str | None) -> str:
+    """href allowlist for employer-supplied URLs (NAV applicationUrl,
+    Jobbnorge link, LinkedIn/manual link). Jinja autoescape stops attribute
+    breakout but not `href="javascript:..."` — fullreview deep, 2026-10-05.
+    Browsers ignore tabs/newlines/leading control chars inside the scheme
+    ("java\tscript:"), so strip them before checking, otherwise the
+    allowlist is trivially bypassed. Anything not http/https/mailto -> "#"."""
+    if not value:
+        return "#"
+    cleaned = "".join(ch for ch in str(value) if ord(ch) > 0x20 and ord(ch) != 0x7F)
+    m = _URL_SCHEME_RE.match(cleaned)
+    if m and m.group(1).lower() in SAFE_URL_SCHEMES:
+        return cleaned
+    return "#"
+
+
+templates.env.filters["safe_url"] = safe_url
 
 
 def days_until(value: str | None) -> int | None:
@@ -261,6 +329,15 @@ LINKEDIN_FETCH_USER_AGENT = (
 )
 
 
+def _is_linkedin_https_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and (host == "linkedin.com" or host.endswith(".linkedin.com"))
+
+
 def fetch_linkedin_preview(url: str) -> dict:
     """One-off fetch of a single public LinkedIn job page a human pasted
     into the add-vacancy form — deliberately NOT part of linkedin_client.py
@@ -279,7 +356,23 @@ def fetch_linkedin_preview(url: str) -> dict:
     hand, same as the description-borrowing fallback the automated LinkedIn
     sync already relies on for every row (see scoring._build_description_
     lender_lookup)."""
-    resp = requests.get(url, headers={"User-Agent": LINKEDIN_FETCH_USER_AGENT}, timeout=15)
+    # SSRF guard (fullreview deep, 2026-10-05): this route is reachable by any
+    # web page that can POST to localhost, so an unchecked URL would let it
+    # probe 127.0.0.1/LAN/cloud-metadata services. Only https LinkedIn hosts,
+    # and redirects are followed by hand so every hop is re-validated (an
+    # open redirect on linkedin.com must not lead us somewhere else).
+    resp = None
+    for _ in range(4):
+        if not _is_linkedin_https_url(url):
+            raise ValueError("Приймаються лише https-посилання на linkedin.com.")
+        resp = requests.get(
+            url, headers={"User-Agent": LINKEDIN_FETCH_USER_AGENT}, timeout=15, allow_redirects=False,
+        )
+        if not getattr(resp, "is_redirect", False):
+            break
+        url = urljoin(url, resp.headers.get("Location", ""))
+    else:
+        raise ValueError("Забагато перенаправлень при відкритті посилання.")
     resp.raise_for_status()
     m = re.search(r'<meta property="og:title" content="([^"]*)"', resp.text)
     if not m:
@@ -399,8 +492,29 @@ def kanban(request: Request):
     return templates.TemplateResponse(request, "kanban.html", {"columns": columns, "score_profile": score_profile})
 
 
+def _safe_sync(source_fn, conn) -> dict:
+    """Run one source's sync; a failure becomes {"error": ...} instead of
+    propagating. NAV and Jobbnorge used to be unwrapped, so a NAV token/HTTP
+    failure 500'd /sync and skipped every other source, the rescore, the
+    deletions and the summary — and the form JS reloaded as if nothing
+    happened, so the outage looked like a quiet day (2026-09-02 NAV incident;
+    fullreview deep 2026-10-05)."""
+    try:
+        return source_fn(conn)
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/sync")
-def trigger_sync():
+def sync_route():
+    """HTTP wrapper: runs the sync, then 303s back to the list."""
+    trigger_sync()
+    return RedirectResponse(url="/", status_code=303)
+
+
+def trigger_sync() -> dict:
+    """The actual sync pass. Returns the stored summary dict (callable with
+    no args from the sync.py CLI; /sync's route function is sync_route)."""
     # Snapshot the whole DB before touching it — see db.backup_db's own
     # docstring for why (2026-07-29 incident: no backup existed, ~50
     # vacancies' user_status got scrambled by an unrelated mistake with no
@@ -421,31 +535,22 @@ def trigger_sync():
     prior_summary_raw = db.get_state(conn, SYNC_STATE_KEY)
     prior_watermark_utc = json.loads(prior_summary_raw).get("watermark_utc") if prior_summary_raw else None
 
-    nav_stats = nav_client.sync(conn)
-    jobbnorge_stats = jobbnorge_client.sync(conn)
-    try:
-        finn_stats = finn_client.sync(conn)
-    except Exception as e:
-        # Gmail auth can expire/break independently of everything else here —
-        # one source failing must not take down NAV/Jobbnorge sync with it.
-        finn_stats = {"error": str(e)}
-    try:
-        easycruit_stats = easycruit_client.sync(conn)
-    except Exception as e:
-        easycruit_stats = {"error": str(e)}
-    try:
-        linkedin_stats = linkedin_client.sync(conn)
-    except Exception as e:
-        # Same Gmail-auth-can-expire reasoning as finn — independent of
-        # NAV/Jobbnorge/finn/easycruit, must not take the rest down with it.
-        linkedin_stats = {"error": str(e)}
+    nav_stats = _safe_sync(nav_client.sync, conn)
+    jobbnorge_stats = _safe_sync(jobbnorge_client.sync, conn)
+    # Gmail auth can expire/break independently of everything else here —
+    # one source failing must not take down the others with it.
+    finn_stats = _safe_sync(finn_client.sync, conn)
+    easycruit_stats = _safe_sync(easycruit_client.sync, conn)
+    linkedin_stats = _safe_sync(linkedin_client.sync, conn)
     scored = scoring.rescore_all(conn)
     deleted_inactive = db.delete_inactive(conn)
     deleted_expired = db.delete_expired_unreacted(conn)
     deleted_archived = db.delete_archived(conn)
     auto_ignored = db.auto_ignore_stale_applications(conn)
     new_high_score = (
-        db.count_new_high_score(conn, prior_watermark_utc, NEW_HIGH_SCORE_THRESHOLD)
+        db.count_new_high_score(
+            conn, prior_watermark_utc, NEW_HIGH_SCORE_THRESHOLD, score_profile=get_score_profile(conn),
+        )
         if prior_watermark_utc else 0
     )
     summary = {
@@ -467,7 +572,7 @@ def trigger_sync():
     db.set_state(conn, SYNC_STATE_KEY, json.dumps(summary, ensure_ascii=False))
     if prior_watermark_utc:
         db.set_state(conn, PREV_SYNC_AT_KEY, prior_watermark_utc)
-    return RedirectResponse(url="/", status_code=303)
+    return summary
 
 
 @app.post("/score-profile")
@@ -476,6 +581,11 @@ def set_score_profile(profile: str = Form(...), next: str = Form("/")):
         raise HTTPException(status_code=400, detail="Unknown score profile")
     conn = get_conn()
     db.set_state(conn, SCORE_PROFILE_KEY, profile)
+    # Open-redirect guard (fullreview deep, 2026-10-05): `next` is a form
+    # field any page can forge. Only same-site absolute paths; "//host" and
+    # "/\\host" are treated by browsers as protocol-relative/external.
+    if not next.startswith("/") or next.startswith("//") or next.startswith("/\\"):
+        next = "/"
     return RedirectResponse(url=next, status_code=303)
 
 
@@ -487,7 +597,9 @@ def sync_status():
     elsewhere that has no way to know a sync happened without it."""
     conn = get_conn()
     last_sync = db.get_state(conn, SYNC_STATE_KEY)
-    watermark = json.loads(last_sync)["watermark_utc"] if last_sync else None
+    # .get: summaries stored before watermark_utc existed would KeyError
+    # (same tolerance as trigger_sync's prior_watermark read) — 2026-10-05.
+    watermark = json.loads(last_sync).get("watermark_utc") if last_sync else None
     return {"watermark_utc": watermark}
 
 
@@ -560,9 +672,23 @@ def add_vacancy_submit(
         "extent": None,
         "sector": None,
     }
-    db.upsert_vacancy_row(conn, row, source=source)
-    if user_status in db.USER_STATUSES:
-        db.set_user_status(conn, new_uuid, user_status)
+    already_tracked = db.get_vacancy(conn, new_uuid) is not None
+    # ignore_dismissed=True: re-adding a link the user once trashed is a
+    # deliberate resurrection — without it the tombstone (db.delete_archived)
+    # makes the upsert a silent no-op and the redirect below 404s (2026-10-05).
+    # A tombstoned uuid has no row, so already_tracked is False and the
+    # chosen status is applied to the revived row.
+    db.upsert_vacancy_row(conn, row, source=source, ignore_dismissed=True)
+    # The form's default "new" is indistinguishable from "user didn't touch
+    # it", so re-adding an already-tracked LinkedIn link used to reset an
+    # 'applied' row back to 'new' (reproduced, fullreview deep 2026-10-05).
+    # Only write a status for a brand-new row, or when the user explicitly
+    # picked something other than the default. Via the twins-aware setter
+    # (like the detail-page status action) so a status chosen here reaches a
+    # cross-source copy of the same posting instead of being lost on it
+    # (review 2026-10-05).
+    if user_status in db.USER_STATUSES and (not already_tracked or user_status != "new"):
+        scoring.set_user_status_with_twins(conn, new_uuid, user_status)
     scoring.rescore_one(conn, new_uuid)
     return RedirectResponse(url=f"/vacancy/{new_uuid}", status_code=303)
 
@@ -630,7 +756,15 @@ def vacancy_resume_prompt(request: Request, uuid: str, lang: str = "en"):
 def update_status(request: Request, uuid: str, user_status: str = Form(...)):
     conn = get_conn()
     get_vacancy_or_404(conn, uuid)
-    db.set_user_status(conn, uuid, user_status)
+    # Twin-aware (cross-source duplicates share one status) — 2026-10-05.
+    # An unknown status used to bubble up as ValueError -> 500; it's a bad
+    # request, so 400.
+    if user_status not in db.USER_STATUSES:
+        raise HTTPException(status_code=400, detail="Unknown user_status")
+    try:
+        scoring.set_user_status_with_twins(conn, uuid, user_status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     vacancy = db.get_vacancy(conn, uuid)
     return templates.TemplateResponse(
         request, "_status_control.html", {"v": vacancy}

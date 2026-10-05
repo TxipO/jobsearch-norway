@@ -63,11 +63,17 @@ def parse_digest(text: str) -> list[dict]:
             title = lines[url_idx - 3]
         title = title.lstrip(",").strip()
 
-        employer, _, location = employer_loc.rpartition(",")
+        # No comma -> the line is the employer only. rpartition() puts the
+        # whole string in the LAST slot, which made the employer name the
+        # location ("Kiwi" -> municipal "Kiwi") — 2026-10-05 audit.
+        if "," in employer_loc:
+            employer, _, location = employer_loc.rpartition(",")
+        else:
+            employer, location = employer_loc, ""
         entries.append({
             "title": title,
             "employer": employer.strip() or employer_loc.strip(),
-            "location": location.strip(),
+            "location": location.strip() or None,
             "url": url_match.group(1),
         })
     return entries
@@ -75,7 +81,7 @@ def parse_digest(text: str) -> list[dict]:
 
 def to_vacancy_row(entry: dict, municipality_county: dict[str, str]) -> dict:
     job_id = entry["url"].rsplit("/", 1)[-1]
-    county = municipality_county.get(entry["location"].strip().upper())
+    county = municipality_county.get((entry["location"] or "").strip().upper())
     return {
         "uuid": f"finn-{job_id}",
         "status": "ACTIVE",
@@ -96,7 +102,8 @@ def to_vacancy_row(entry: dict, municipality_county: dict[str, str]) -> dict:
 
 def sync(conn: sqlite3.Connection) -> dict:
     entries = []
-    for text in fetch_digest_texts():
+    texts = fetch_digest_texts()
+    for text in texts:
         entries.extend(parse_digest(text))
 
     municipality_county = _build_municipality_county_map()
@@ -108,7 +115,20 @@ def sync(conn: sqlite3.Connection) -> dict:
         if row["uuid"] in seen:
             continue
         seen.add(row["uuid"])
-        upsert_vacancy_row(conn, row, source="finn")
-        upserted += 1
+        # upsert_vacancy_row returns False for a tombstoned (trashed +
+        # deleted) uuid — nothing written, so it must not count (review
+        # 2026-10-05).
+        if upsert_vacancy_row(conn, row, source="finn"):
+            upserted += 1
 
-    return {"parsed": len(entries), "upserted": upserted}
+    stats = {"messages": len(texts), "parsed": len(entries), "upserted": upserted}
+    if texts and not entries:
+        # Digest-format drift used to be silent: messages fetched but 0 parsed
+        # printed {"parsed": 0, "upserted": 0}, identical to an idle day
+        # (fullreview Stage 2 item 12, 2026-10-05). The web summary shows
+        # stats dicts, so this makes the drift visible.
+        stats["warning"] = (
+            f"{len(texts)} finn.no digest message(s) fetched but 0 entries parsed — "
+            f"the digest format may have changed; check parse_digest()."
+        )
+    return stats

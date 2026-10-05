@@ -154,3 +154,25 @@ def test_to_vacancy_row_county_none_when_unresolved():
     entry = {"job_id": "1", "title": "X", "employer": "Y", "location": "Nowhereville, Norway"}
     row = to_vacancy_row(entry, {"OSLO": "Oslo"})
     assert row["county"] is None
+
+
+def test_sync_reports_messages_and_warns_when_digest_format_drifted(tmp_path, monkeypatch):
+    """Fetched messages but 0 parsed used to read {"parsed": 0, "upserted": 0},
+    identical to an idle day (fullreview Stage 2 item 12, 2026-10-05)."""
+    import db
+    import linkedin_client
+
+    conn = db.connect(tmp_path / "t.db")
+    monkeypatch.setattr(linkedin_client, "_build_municipality_county_map", lambda: {})
+
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: ["a brand new digest layout"])
+    stats = linkedin_client.sync(conn)
+    assert stats["messages"] == 1 and stats["parsed"] == 0
+    assert "warning" in stats
+
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [])
+    assert linkedin_client.sync(conn) == {"messages": 0, "parsed": 0, "upserted": 0}
+
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [REAL_DIGEST_EXCERPT])
+    stats = linkedin_client.sync(conn)
+    assert stats["messages"] == 1 and stats["parsed"] > 0 and "warning" not in stats

@@ -14,6 +14,7 @@ undocumented endpoint the site's own SPA calls (see DETAIL_URL docstring).
 """
 
 import concurrent.futures
+import logging
 import re
 import sqlite3
 
@@ -30,6 +31,13 @@ from db import (
 
 BASE_URL = "https://publicapi.jobbnorge.no"
 PAGE_SIZE = 100
+# Hard cap on pagination in fetch_all_jobs(). If the API ever ignores `page`
+# and keeps returning a full page, the loop would never end (2026-10-05
+# audit). 200 pages * 100 = 20 000 postings, ~an order of magnitude above the
+# real nationwide total.
+MAX_PAGES = 200
+
+logger = logging.getLogger(__name__)
 DETAIL_WORKERS = 8
 
 # Undocumented — this is what the Angular SPA on jobbnorge.no itself calls to
@@ -115,6 +123,10 @@ def fetch_full_description(job_id) -> str | None:
         data = resp.json()
     except (requests.RequestException, ValueError):
         return None
+    # Non-dict JSON (an error body that is a list/string) made data.get raise
+    # AttributeError, which aborted the whole backfill loop (2026-10-05).
+    if not isinstance(data, dict):
+        return None
     text = _extract_text_from_components(data.get("components") or [])
     return text or None
 
@@ -133,7 +145,9 @@ def fetch_poststed_to_municipality() -> dict[str, str]:
     resp = requests.get(POSTAL_REGISTRY_URL, timeout=30)
     resp.raise_for_status()
     lookup: dict[str, str] = {}
-    for line in resp.content.decode("cp1252").splitlines():
+    # errors="replace": cp1252 leaves bytes like 0x81 undefined, and a strict
+    # decode made one such byte discard the whole registry (2026-10-05).
+    for line in resp.content.decode("cp1252", errors="replace").splitlines():
         cols = line.split("\t")
         if len(cols) >= 4:
             poststed, municipality = cols[1].strip(), cols[3].strip()
@@ -162,24 +176,32 @@ def _build_municipality_county_map() -> dict[str, str]:
        bridges poststed -> municipality, which then resolves to county via
        the same table below."""
     municipality_county: dict[str, str] = {}
-    for county in fetch_counties():
-        municipalities = county.get("municipality", [])
-        if not municipalities:
-            # Oslo is simultaneously a kommune and a fylke (Norway's one
-            # city-county), so it has no nested municipality list of its
-            # own — map the county name to itself, or every Oslo posting
-            # (a very common location) would silently fail to resolve.
-            municipality_county[county["name"].strip().upper()] = county["name"]
-        for muni in municipalities:
-            for part in muni["name"].split(" - "):
-                municipality_county[part.strip().upper()] = county["name"]
+    # The county lookup is optional enrichment, but this function is shared by
+    # jobbnorge, finn AND linkedin — an uncaught error here used to kill all
+    # three sources. Degrade to {} (county left NULL) with a warning instead
+    # (2026-10-05 audit).
+    try:
+        for county in fetch_counties():
+            municipalities = county.get("municipality", [])
+            if not municipalities:
+                # Oslo is simultaneously a kommune and a fylke (Norway's one
+                # city-county), so it has no nested municipality list of its
+                # own — map the county name to itself, or every Oslo posting
+                # (a very common location) would silently fail to resolve.
+                municipality_county[county["name"].strip().upper()] = county["name"]
+            for muni in municipalities:
+                for part in muni["name"].split(" - "):
+                    municipality_county[part.strip().upper()] = county["name"]
+    except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as e:
+        logger.warning(f"County lookup failed, continuing without county data: {e!r}")
+        return {}
 
     lookup = dict(municipality_county)
     try:
         for poststed, municipality in fetch_poststed_to_municipality().items():
             if poststed not in lookup and municipality in municipality_county:
                 lookup[poststed] = municipality_county[municipality]
-    except requests.RequestException:
+    except (requests.RequestException, UnicodeDecodeError):
         pass  # postal registry is a bonus signal, not required — degrade to municipality-only matching
     return lookup
 
@@ -203,6 +225,12 @@ def fetch_all_jobs() -> list[dict]:
         if len(batch) < PAGE_SIZE:
             break
         page += 1
+        if page > MAX_PAGES:
+            logger.warning(
+                f"Jobbnorge pagination stopped at {MAX_PAGES} pages "
+                f"({len(jobs)} jobs) — API may be ignoring `page`."
+            )
+            break
     return jobs
 
 
@@ -270,16 +298,21 @@ def sync(conn: sqlite3.Connection) -> dict:
         "SELECT uuid, description FROM vacancies WHERE source = 'jobbnorge' AND LENGTH(description) >= 300"
     ).fetchall())
 
+    written = 0
     for job in jobs:
         row = to_vacancy_row(job, municipality_county)
         if row["uuid"] in existing_full:
             row["description"] = existing_full[row["uuid"]]
         pct = _parse_extent_percent(job.get("jobScope"), row["title"], row["description"])
-        upsert_vacancy_row(conn, row, source="jobbnorge")
+        # False = tombstoned uuid, nothing written: not counted and no row to
+        # set the extent on (review 2026-10-05).
+        if not upsert_vacancy_row(conn, row, source="jobbnorge"):
+            continue
+        written += 1
         set_extent_percent(conn, row["uuid"], pct)
 
     backfilled = backfill_full_descriptions(conn)
-    return {"fetched": len(jobs), "descriptions_backfilled": backfilled}
+    return {"fetched": written, "descriptions_backfilled": backfilled}
 
 
 def backfill_full_descriptions(conn: sqlite3.Connection) -> int:

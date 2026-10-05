@@ -79,7 +79,31 @@ def place_cv(uuid: str, source_path: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     dest = out_dir / f"cv{source_path.suffix.lower()}"
-    shutil.copyfile(source_path, dest)
+    try:
+        shutil.copyfile(source_path, dest)
+    except shutil.SameFileError:
+        # The source already IS generated/<slug>/cv.<ext> (re-placing the
+        # file in situ, e.g. after editing it) — nothing to copy, but still
+        # fall through to drop stale siblings and refresh cv.txt.
+        pass
+
+    # STALE CV DELIVERABLE guard (2026-10-05, fullreview Stage 2 item 10; same
+    # class as the 2026-08-30 incident where a stale CV went to an employer):
+    # generate_documents.py treats an existing cv.pdf as the final deliverable
+    # and never touches it, so placing a NEW cv.docx next to an OLDER cv.pdf
+    # left the old PDF as what gets sent (and vice versa). The newly placed
+    # file is the only CV for this vacancy — remove the other-extension
+    # sibling. cv.txt is not a deliverable and is rewritten just below.
+    for ext in SUPPORTED_EXTENSIONS - {dest.suffix}:
+        stale = out_dir / f"cv{ext}"
+        if stale.exists():
+            try:
+                stale.unlink()
+            except OSError as e:
+                raise ValueError(
+                    f"could not remove the stale {stale.name} ({e}) — close it in any "
+                    f"viewer/Word and retry, or the old CV would stay the deliverable"
+                ) from e
 
     text = extract_text(dest)
     (out_dir / "cv.txt").write_text(text, encoding="utf-8")

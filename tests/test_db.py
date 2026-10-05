@@ -2,6 +2,8 @@
 never drift since they share _vacancy_filters), migrations being safely
 re-runnable, and the source-agnostic upsert path Jobbnorge/finn.no use."""
 
+import json
+
 import db
 
 
@@ -843,3 +845,140 @@ def test_strip_html_decodes_entities():
     """2026-08-29: "4&#43; years" never matched a plain "4+ years" pattern
     — found in 42% of the live corpus (4503/10768 active ads)."""
     assert db.strip_html("4&#43; years &amp; counting") == "4+ years & counting"
+
+
+def test_strip_html_normalizes_nbsp_and_nfd():
+    """2026-10-05 (/fullreview deep): "må ha&nbsp;norsk&nbsp;autorisasjon"
+    and a decomposed (NFD) "å" made every literal-space / literal-å regex
+    in hard_blocks/scoring silently miss. Output is NFC with inline
+    whitespace collapsed; newlines (clause scoping) are kept."""
+    import unicodedata
+    assert db.strip_html("må ha&nbsp;norsk\xa0autorisasjon") == "må ha norsk autorisasjon"
+    nfd = unicodedata.normalize("NFD", "må ha")
+    assert db.strip_html(nfd) == "må ha" and unicodedata.is_normalized("NFC", db.strip_html(nfd))
+    assert db.strip_html("a  \t b<br>c") == "a b\nc"
+
+
+def test_delete_archived_tombstones_so_resync_does_not_resurrect(tmp_path):
+    """2026-10-05: delete_archived() DELETEd the row, but finn/LinkedIn
+    digests are re-read from the whole Gmail history every sync (and NAV can
+    re-send), so the next sync re-inserted the uuid as 'new'."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "finn-1", source="finn")
+    _insert_vacancy(conn, "finn-2", source="finn")
+    db.set_user_status(conn, "finn-1", "archived")
+
+    assert db.delete_archived(conn) == 1
+    assert db.get_vacancy(conn, "finn-1") is None
+
+    # Next sync re-reads the same digest entry.
+    _insert_vacancy(conn, "finn-1", source="finn")
+    assert db.get_vacancy(conn, "finn-1") is None
+    assert db.get_vacancy(conn, "finn-2") is not None  # untouched rows still sync
+
+    # NAV path too — returns False so it is never counted as a "new" row.
+    assert db.upsert_active_vacancy(conn, "finn-1", "ACTIVE", {"title": "x"}) is False
+    assert db.get_vacancy(conn, "finn-1") is None
+
+
+def test_manual_readd_clears_tombstone(tmp_path):
+    """A deliberate re-add (web form passes ignore_dismissed=True) of a link
+    the user once trashed must work, not silently no-op."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "linkedin-9", source="linkedin")
+    db.set_user_status(conn, "linkedin-9", "archived")
+    db.delete_archived(conn)
+
+    row = {"uuid": "linkedin-9", "status": "ACTIVE", "title": "Back again"}
+    assert db.upsert_vacancy_row(conn, row, "linkedin") is False
+    assert db.upsert_vacancy_row(conn, row, "linkedin", ignore_dismissed=True) is True
+    assert db.get_vacancy(conn, "linkedin-9")["user_status"] == "new"
+    # tombstone cleared: ordinary syncs now update it normally
+    assert db.upsert_vacancy_row(conn, row, "linkedin") is True
+
+
+def test_search_matches_non_ascii_case_insensitively(tmp_path):
+    """2026-10-05: SQLite LOWER()/LIKE only fold ASCII, so a search for
+    "Ålesund"/"Østfold" returned 0 even with identical case."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "a", title="Lagerarbeider Ålesund", business_name="Østfold Transport")
+    _insert_vacancy(conn, "b", title="Something else")
+    for term in ("Ålesund", "ålesund", "ÅLESUND", "østfold", "Østfold transport"):
+        assert [r["uuid"] for r in db.list_vacancies(conn, search=term)] == ["a"], term
+        assert db.count_vacancies(conn, search=term) == 1, term
+
+
+def test_search_escapes_like_wildcards(tmp_path):
+    """2026-10-05: %, _ and \\ in the user's term were live LIKE wildcards."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "a", title="100% remote")
+    _insert_vacancy(conn, "b", title="Plain job")
+    _insert_vacancy(conn, "c", title="snake_case dev")
+    assert [r["uuid"] for r in db.list_vacancies(conn, search="%")] == ["a"]
+    assert [r["uuid"] for r in db.list_vacancies(conn, search="_")] == ["c"]
+    assert db.list_vacancies(conn, search="\\") == []
+
+
+def test_occupation_filter_matches_ascii_escaped_json(tmp_path):
+    """2026-10-05: occupation_categories is stored via json.dumps (default
+    ensure_ascii=True), so "Håndverkere" is stored escaped and a raw-text
+    LIKE needle never matched."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "a")
+    _insert_vacancy(conn, "b")
+    conn.execute(
+        "UPDATE vacancies SET occupation_categories = ? WHERE uuid = 'a'",
+        (json.dumps([{"level1": "Håndverkere", "level2": "Tømrere"}]),),
+    )
+    conn.execute(
+        "UPDATE vacancies SET occupation_categories = ? WHERE uuid = 'b'",
+        (json.dumps([{"level1": "Transport og lager"}]),),
+    )
+    conn.commit()
+    assert [r["uuid"] for r in db.list_vacancies(conn, occupation_category="Håndverkere")] == ["a"]
+    assert [r["uuid"] for r in db.list_vacancies(conn, occupation_category="Transport og lager")] == ["b"]
+    assert db.list_vacancies(conn, occupation_category="%") == []
+
+
+def test_readd_with_empty_fields_keeps_deadline_and_terms(tmp_path):
+    """2026-10-05: the 2026-09-09 COALESCE fix missed application_due(_sort)/
+    extent/engagement_type — a manual LinkedIn re-add nulled the deadline."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "linkedin-1", source="linkedin", application_due="2026-12-01",
+                    extent="Heltid", engagement_type="Fast")
+    _insert_vacancy(conn, "linkedin-1", source="linkedin", application_due=None,
+                    extent=None, engagement_type="")
+    row = db.get_vacancy(conn, "linkedin-1")
+    assert row["application_due"] == "2026-12-01"
+    assert row["application_due_sort"] == "2026-12-01"
+    assert row["extent"] == "Heltid"
+    assert row["engagement_type"] == "Fast"
+    # A real new non-date value still replaces it (and resets the sort key).
+    _insert_vacancy(conn, "linkedin-1", source="linkedin", application_due="Løpende")
+    row = db.get_vacancy(conn, "linkedin-1")
+    assert row["application_due"] == "Løpende" and row["application_due_sort"] is None
+
+
+def test_list_vacancies_order_is_deterministic_on_ties(tmp_path):
+    """2026-10-05: ties on score+published (or deadline) fell back to
+    arbitrary plan order — final uuid tiebreak on both sorts."""
+    conn = _make_conn(tmp_path)
+    for u in ("c", "a", "b"):
+        _insert_vacancy(conn, u, application_due="2026-12-01")
+    conn.execute("UPDATE vacancies SET score = 50, published = '2026-10-01'")
+    conn.commit()
+    assert [r["uuid"] for r in db.list_vacancies(conn)] == ["a", "b", "c"]
+    assert [r["uuid"] for r in db.list_vacancies(conn, sort="deadline")] == ["a", "b", "c"]
+
+
+def test_count_new_high_score_ignores_flagged_rows(tmp_path):
+    """2026-10-05: the banner counted rows the default list hides (flagged)."""
+    conn = _make_conn(tmp_path)
+    _insert_vacancy(conn, "a")
+    _insert_vacancy(conn, "b")
+    conn.execute("UPDATE vacancies SET score = 80, score_it = 80")
+    conn.commit()
+    assert db.count_new_high_score(conn, "2000-01-01 00:00:00", 70) == 2
+    db.set_flagged(conn, "b", True)
+    assert db.count_new_high_score(conn, "2000-01-01 00:00:00", 70) == 1
+    assert db.count_new_high_score(conn, "2000-01-01 00:00:00", 70) == db.count_vacancies(conn, min_score=70)

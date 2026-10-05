@@ -638,3 +638,81 @@ def test_car_required_negated_mention_not_penalized():
         "Du trenger ikke førerkort for denne stillingen.",
     )
     assert bd["car_penalty"]["points"] == 0
+
+
+def test_salary_does_not_glue_adjacent_numbers():
+    """2026-10-05 (/fullreview deep): the old number regex glued adjacent digit
+    runs — 'kr 500 000 20 stillinger' became 50 000 020 and 'kr 520 000
+    31.12.2026' became 52 000 031. Thousands-group-aware matching now."""
+    assert _parse_salary("Lønn kr 500 000 20 stillinger") == "kr 500 000"
+    assert _parse_salary("Lønn kr 520 000 31.12.2026") == "kr 520 000"
+    assert _salary_min_value(_parse_salary("Lønn kr 520 000 31.12.2026")) == 520000
+    # ranges, plain digits and nbsp separators still work
+    assert _parse_salary("kr 500 000 - 600 000 per år") == "kr 500 000 – 600 000"
+    assert _parse_salary("Lønn kr 680000.") == "kr 680 000"
+    assert _parse_salary("Lønn kr 680\xa0000 per år") == "kr 680 000"
+
+
+def _penalty(description, key, title="Servicedesk-medarbeider"):
+    return _score(title, description)[1][key]["points"]
+
+
+def test_management_penalty_skips_negated_and_soft_mentions():
+    """2026-10-05: bare substring match gave -30 to 'ikke personalansvar',
+    'uten personalansvar' and 'ledererfaring er en fordel'."""
+    for text in (
+        "Stillingen har ikke personalansvar.",
+        "Rollen er uten personalansvar.",
+        "Ledererfaring er en fordel.",
+        "Det er ingen krav til ledererfaring.",
+    ):
+        assert _penalty(text, "management_penalty") == 0, text
+    # a real requirement still penalises
+    assert _penalty("Stillingen har personalansvar for 12 ansatte.", "management_penalty") == -30
+    assert _penalty("Du må ha ledererfaring.", "management_penalty") == -30
+
+
+def test_years_penalty_skips_negated_soft_and_employer_boilerplate():
+    for text in (
+        "Vi har over 25 års erfaring i bransjen.",
+        "Selskapet har mer enn 30 års erfaring.",
+        "3 års erfaring er en fordel.",
+        "Det kreves ingen 3 års erfaring.",
+    ):
+        assert _penalty(text, "senior_penalty") == 0, text
+    assert _penalty("Du har minimum 3 års erfaring fra IT-support.", "senior_penalty") == -10
+    assert _penalty("Du har over 3 års erfaring fra lager.", "senior_penalty") == -10
+    assert _penalty("Krav: 5+ years of experience.", "senior_penalty") == -10
+
+
+def test_norwegian_fluency_penalty_skips_negated_and_soft_mentions():
+    for text in (
+        "Vi krever ikke flytende norsk.",
+        "Flytende norsk er en fordel.",
+    ):
+        assert _penalty(text, "norwegian_fluency_penalty") == 0, text
+    assert _penalty("Du må beherske flytende norsk.", "norwegian_fluency_penalty") == -20
+
+
+def test_equivalence_alternative_does_not_cancel_years_or_management_penalty():
+    """Review 2026-10-05: 'eller tilsvarende'/'eller lignende' (degree-style
+    equivalence) were treated as softeners and wiped these penalties; master
+    kept them."""
+    from scoring import _firm_pattern_matches, MANAGEMENT_REQUIRED_PATTERNS, YEARS_EXPERIENCE_PATTERNS
+    assert _firm_pattern_matches("minimum 3 års erfaring fra lager eller tilsvarende",
+                                 YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True)
+    assert _firm_pattern_matches(
+        "du har personalansvar for 12 ansatte og ledererfaring fra butikk eller lignende",
+        MANAGEMENT_REQUIRED_PATTERNS)
+    # real softeners still cancel
+    assert not _firm_pattern_matches("minimum 3 års erfaring er en fordel",
+                                     YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True)
+
+
+def test_salary_last_group_is_not_truncated_or_extended_into_trailing_digits():
+    """Review 2026-10-05: 'kr 520 000 2026' came out as 'kr 520 000 202'
+    (length-capped mid-number) and 'kr 600 000 100' as 600 000 100."""
+    assert _parse_salary("Lønn kr 520 000 2026 oppstart") == "kr 520 000"
+    assert _parse_salary("kr 600 000 100") == "kr 600 000"
+    assert _parse_salary("Lønn kr 1 000 000 per år") == "kr 1 000 000"
+    assert _parse_salary("lønn mellom 380 000 og 520 000 kr") == "kr 380 000 – 520 000"

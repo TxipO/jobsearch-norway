@@ -662,3 +662,246 @@ def test_leading_softener_still_wins_over_trailing_qualifier():
     body = "Kvalifikasjoner:\nDet er ønskelig at du har truckførerbevis, gjerne T1-T4\n"
     excluded, _ = check_exclusion("Lagermedarbeider", body)
     assert not excluded
+
+
+# --- /fullreview deep audit fixes (2026-10-05) -----------------------------
+# Every case below was reproduced with check_exclusion before the fix. The
+# rule for this round: only NARROW false blocks of wanted jobs / fix logic
+# bugs — nothing here widens a pattern (that needs live-DB measurement).
+
+def test_looking_for_someone_who_sentence_is_not_a_heading():
+    """Regression from dce4f32: the heading alternative `we are looking for
+    someone who(?:\\s+\\w+)*` swallowed a whole one-line sentence, and
+    iter_requirement_clauses skips headings — so the requirement inside it
+    was never read."""
+    excluded, reason = check_exclusion(
+        "Warehouse worker",
+        "We are looking for someone who must have a valid forklift certificate",
+    )
+    assert excluded
+    assert "forklift" in reason.lower()
+
+
+def test_looking_for_someone_who_colon_heading_still_a_heading():
+    """The dce4f32 case itself keeps working: the same words WITH a colon
+    are a heading, and the bullet under it is the requirement."""
+    excluded, _ = check_exclusion(
+        "Warehouse worker", "We are looking for someone who has:\nForklift certificate\n"
+    )
+    assert excluded
+
+
+def test_security_clearance_negated_or_soft_not_blocked():
+    bodies = [
+        "Det stilles ikke krav til sikkerhetsklarering.",
+        "Det er ikke krav om sikkerhetsklarering",
+        "Stillingen vil ikke kreve sikkerhetsklarering",
+        "Det er en fordel å inneha sikkerhetsklarering.",
+        "Du trenger ikke å inneha sikkerhetsklarering.",
+        "Sikkerhetsklarering på nivå hemmelig er ønskelig, men ikke et krav.",
+    ]
+    for body in bodies:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
+def test_security_clearance_some_positions_boilerplate_variants_not_blocked():
+    """The employer-wide disclaimer guard used to know only the literal
+    "enkelte stillinger"."""
+    bodies = [
+        "Noen stillinger kan kreve sikkerhetsklarering etter sikkerhetsloven",
+        "For enkelte av stillingene er det krav om sikkerhetsklarering",
+        "For visse stillinger er det krav til sikkerhetsklarering på nivå begrenset",
+        "Noen av stillingene i Forsvaret krever sikkerhetsklarering.",
+    ]
+    for body in bodies:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
+def test_security_clearance_real_requirements_still_blocked_after_negation_guard():
+    bodies = [
+        "Stillingen krever sikkerhetsklarering på nivå HEMMELIG.",
+        "Du må kunne sikkerhetsklareres.",
+        # a negation in an EARLIER comma-segment must not disarm the match
+        "Stillingen er ikke deltid, men krever sikkerhetsklarering på nivå hemmelig.",
+        # "noen" far from "stilling" is not the employer-wide disclaimer
+        "Vi søker noen til stillingen. Du må kunne sikkerhetsklareres.",
+    ]
+    for body in bodies:
+        assert check_exclusion("Systemutvikler", body)[0], body
+
+
+def test_authorisation_negated_or_soft_not_blocked():
+    for body in [
+        "Det er en fordel med autorisasjon som helsefagarbeider",
+        "Ingen krav om autorisasjon som sykepleier",
+    ]:
+        assert not check_exclusion("Kontormedarbeider", body)[0], body
+
+
+def test_generic_authorisation_without_health_context_not_blocked():
+    """"Du må ha autorisasjon for tilgang til driftsmiljøet" is IT access
+    rights (the user's own target field), not helsepersonelloven. Chosen
+    fix: the generic krever/må-ha alternatives need a health-profession
+    term within ~150 chars and may not be a "tilgang" clause."""
+    for body in [
+        "Du må ha autorisasjon for tilgang til driftsmiljøet",
+        "Arbeidet krever autorisasjon fra DSB for elvirksomhet",
+    ]:
+        assert not check_exclusion("IT-driftstekniker", body)[0], body
+
+
+def test_generic_authorisation_with_health_context_still_blocked():
+    excluded, _ = check_exclusion(
+        "Assistent", "Vi søker helsepersonell. Du må ha norsk autorisasjon."
+    )
+    assert excluded
+
+
+def test_eu_passport_negated_not_blocked():
+    for body in ["No EU passport is required.", "An EU passport is not required."]:
+        assert not check_exclusion("Customer Support", body)[0], body
+
+
+def test_title_false_blocks_of_wanted_jobs_not_blocked():
+    titles = [
+        "Studiekonsulent ved Institutt for psykologi",
+        "Produksjonsoperatør farmasøytisk industri",
+        "Lagermedarbeider farmasøytisk grossist",
+        "Advokatsekretær", "Advokatassistent",
+        "Kontormedarbeider advokatfirma", "Resepsjonist advokatkontor",
+        "Tannlegeassistent",
+        "Vi lærer deg opp som lagermedarbeider",
+        "Renholder ved ambulansestasjonen",
+        "Lærlingansvarlig", "Rådgiver lærlingordning", "Lærlingkoordinator",
+        "Security Researcher", "Threat Researcher", "UX Researcher",
+    ]
+    for title in titles:
+        assert not check_exclusion(title, "")[0], title
+
+
+def test_title_narrowing_keeps_genuine_blocks():
+    """Mirror of the test above: each narrowed pattern still blocks the real
+    profession and its compounds."""
+    titles = [
+        "Psykolog", "Kommunepsykolog", "Farmasøyt", "Provisorfarmasøyt",
+        "Advokat", "Advokatfullmektig", "Politiadvokat",
+        "Tannlege", "Lærer", "Lærer på ungdomstrinnet", "Vi søker lærer til 5. trinn",
+        "Ambulansearbeider", "Lærling", "Lærlinger søkes", "Lærling elektriker",
+        "Researcher", "Senior Researcher",
+    ]
+    for title in titles:
+        assert check_exclusion(title, "")[0], title
+
+
+def test_sentence_after_digit_is_split_so_benefits_do_not_soften_requirement():
+    """"T4." used to stay glued to the next sentence (the splitter refused to
+    split after a digit), so "fordeler" in "Vi tilbyr gode fordeler"
+    softened the requirement."""
+    excluded, _ = check_exclusion(
+        "Lagermedarbeider", "Krav: truckførerbevis T4. Vi tilbyr gode fordeler."
+    )
+    assert excluded
+
+
+def test_clause_split_keeps_dates_and_decimals_intact():
+    from hard_blocks import iter_requirement_clauses
+    clauses = [c for c, _ in iter_requirement_clauses(
+        "Versjon 1.5 gjelder fra 31.12.2026. Neste setning"
+    )]
+    assert clauses == ["Versjon 1.5 gjelder fra 31.12.2026", "Neste setning"]
+
+
+def test_fordel_matches_advantage_not_benefits():
+    from hard_blocks import has_optional_marker
+    for soft in ["det er en fordel", "truckførerbevis er fordelaktig", "fordelen er", "en konkurransefordel"]:
+        assert has_optional_marker(soft), soft
+    for hard in ["vi tilbyr gode fordeler", "oppgaver fordelt på teamet"]:
+        assert not has_optional_marker(hard), hard
+
+
+def test_benefit_headings_close_the_requirement_section():
+    """A perk "Opplæring og truckførerbevis (T4)" under "Vi tilbyr deg:" /
+    "Hos oss får du:" / "Om oss:" is something the employer GIVES; the
+    headings used to be unrecognised, so the preceding "Kvalifikasjoner:"
+    section stayed open and the line blocked the ad."""
+    for heading in ["Vi tilbyr deg:", "Hos oss får du:", "Om oss:"]:
+        body = f"Kvalifikasjoner:\nErfaring fra lager\n{heading}\nOpplæring og truckførerbevis (T4)\n"
+        assert not check_exclusion("Lagermedarbeider", body)[0], heading
+
+
+def test_title_and_body_are_unicode_and_whitespace_normalised():
+    """Decomposed å/ø (NFD) and NBSP/double spaces silently defeated
+    patterns with a precomposed letter or a literal space."""
+    import unicodedata
+    nbsp = chr(0xA0)
+    nfd = unicodedata.normalize("NFD", "Sjåfør")
+    assert nfd != "Sjåfør"
+    assert check_exclusion(nfd, "")[0]
+    assert check_exclusion(f"Instrumentation{nbsp}{nbsp}Technician", "")[0]
+    assert check_exclusion("Lagermedarbeider", f"Krav:{nbsp}{nbsp}truckførerbevis{nbsp}T4")[0]
+    # NBSPs must not hide the "Vi lærer deg opp" verb exemption either
+    assert not check_exclusion(f"Vi{nbsp}lærer{nbsp}deg{nbsp}opp", "")[0]
+
+
+def test_nynorsk_no_means_now_not_negation():
+    """Nynorsk "no" = "now" (common in Vestland ads). Bare English "no" used
+    to count as negation anywhere earlier in the clause, so these real
+    requirements slipped through. (Wording uses the clearance phrasing the
+    regex knows; Nynorsk spellings like "sikkerheitsklarering" are a
+    separate, unmeasured widening and are NOT covered here.)"""
+    for body in [
+        "Vi søkjer no ein IT-konsulent som må kunne sikkerhetsklareres.",
+        "Vi har no ledig stilling som krever sikkerhetsklarering på nivå hemmelig.",
+        "Vi har nå ledig stilling som krever sikkerhetsklarering på nivå hemmelig.",
+    ]:
+        assert check_exclusion("IT-konsulent", body)[0], body
+
+
+def test_english_negator_far_from_match_does_not_unblock():
+    excluded, _ = check_exclusion(
+        "Customer Support",
+        "You will not be working from Norway and you must hold a valid EU passport.",
+    )
+    assert excluded
+
+
+def test_english_negator_near_match_still_unblocks():
+    for body in ["No EU passport is required.", "We do not require an EU passport."]:
+        assert not check_exclusion("Customer Support", body)[0], body
+
+
+def test_double_negative_firm_requirements_still_blocked():
+    """Review 2026-10-05: any "ikke|uten|ingen" before the match counted as
+    negation, so these FIRM requirements (the negation governs something
+    else) passed; master blocked them."""
+    for body in [
+        "Søkere uten norsk autorisasjon som sykepleier vil ikke bli vurdert.",
+        "Det er ikke mulig å tiltre stillingen uten autorisasjon etter sikkerhetsloven.",
+    ]:
+        assert check_exclusion("Kontormedarbeider", body)[0], body
+
+
+def test_explicit_no_requirement_phrases_still_unblock():
+    for body in [
+        "Det stilles ikke krav til sikkerhetsklarering.",
+        "Ikke krav om sikkerhetsklarering.",
+        "Ingen krav om sikkerhetsklarering.",
+        "Uten krav til sikkerhetsklarering.",
+        "Stillingen vil ikke kreve sikkerhetsklarering.",
+        "Sikkerhetsklarering er ikke nødvendig.",
+        "Sikkerhetsklarering er ikke påkrevd.",
+        "Du trenger ikke sikkerhetsklarering.",
+        "Ikkje krav om sikkerhetsklarering.",
+    ]:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
+def test_softener_for_another_claim_does_not_cancel_the_clearance_block():
+    """Review 2026-10-05: the softener must be in the SAME sub-segment as the
+    match — here "en fordel" qualifies Forsvaret experience, not the
+    clearance."""
+    body = "Du må kunne sikkerhetsklareres for hemmelig og det er en fordel med erfaring fra Forsvaret."
+    assert check_exclusion("Systemutvikler", body)[0]
+    # ... while a softener in the match's own segment keeps unblocking.
+    assert not check_exclusion("Systemutvikler", "Sikkerhetsklarering på nivå hemmelig er ønskelig, men ikke et krav.")[0]
+    assert not check_exclusion("Systemutvikler", "Det er en fordel å inneha sikkerhetsklarering.")[0]

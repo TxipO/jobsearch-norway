@@ -1,4 +1,5 @@
 import concurrent.futures
+import json
 import logging
 import os
 import sqlite3
@@ -23,6 +24,16 @@ CURSOR_KEY = "nav_feed_cursor_id"
 # of it, which is exactly how this feed silently stopped importing for two
 # days (2026-08-31 → 09-02). Do not reintroduce conditional requests here.
 ETAG_KEY = "nav_feed_cursor_etag"
+
+# Per-uuid count of consecutive syncs that were HELD on a page because this
+# ad's detail fetch failed transiently (JSON dict {uuid: count} in
+# feed_state). Without a cap, one ad that keeps 5xx-ing / timing out / answering
+# with invalid JSON holds the cursor on its page forever and halts ALL NAV
+# imports — the same silent-stall shape as the 2026-08-31 incident (review
+# 2026-10-05). After MAX_DETAIL_HOLDS held syncs the ad is given up on
+# (counted as detail_missing) so the cursor can move on.
+FAILURES_KEY = "nav_detail_failures"
+MAX_DETAIL_HOLDS = 3
 
 
 def get_token() -> str:
@@ -51,11 +62,41 @@ def _fetch_ad_detail(token: str, uuid: str) -> dict | None:
     return resp.json().get("ad_content")
 
 
+def _is_permanent_detail_error(exc: requests.RequestException) -> bool:
+    """A 4xx on the detail endpoint (404/410: ad withdrawn between the feed
+    listing and the fetch) will never succeed on retry — treating it as
+    transient would pin the cursor on that page forever (2026-10-05). 408/429
+    are the 4xx that DO clear up on their own, so they stay transient."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status is not None and 400 <= status < 500 and status not in (408, 429)
+
+
+def _load_failures(conn: sqlite3.Connection) -> dict[str, int]:
+    try:
+        data = json.loads(get_state(conn, FAILURES_KEY) or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, int)}
+
+
+def _save_failures(conn: sqlite3.Connection, failures: dict[str, int]) -> None:
+    set_state(conn, FAILURES_KEY, json.dumps(failures, sort_keys=True))
+
+
 def sync(conn: sqlite3.Connection) -> dict:
     token = get_token()
     cursor_id = get_state(conn, CURSOR_KEY)
+    failures = _load_failures(conn)
 
-    stats = {"pages": 0, "new": 0, "updated": 0, "marked_inactive": 0, "detail_missing": 0}
+    # "updated" = the stored ad content really changed; "unchanged" = the feed
+    # re-sent an ad byte-identical to what we hold. The tip page is re-read
+    # every sync (see below), so before 2026-10-05 every idle sync reported
+    # updated=N forever. "detail_errors" = transient detail-fetch failures on
+    # a page — the cursor is held on that page so the next sync retries it.
+    stats = {"pages": 0, "new": 0, "updated": 0, "unchanged": 0, "marked_inactive": 0,
+             "detail_missing": 0, "detail_errors": 0}
 
     if not cursor_id:
         resp = requests.get(f"{BASE_URL}/api/v1/feed?last", headers=_headers(token), timeout=30)
@@ -95,13 +136,19 @@ def sync(conn: sqlite3.Connection) -> dict:
             if entry["status"] == "ACTIVE":
                 active_uuids.append(uuid)
             else:
-                mark_status(conn, uuid, entry["status"], entry["title"], entry["businessName"], entry["municipal"])
+                # .get(): an INACTIVE entry missing one of these keys must not
+                # raise KeyError before the cursor advances — that would wedge
+                # the cursor on this page forever (2026-10-05 audit).
+                mark_status(conn, uuid, entry["status"], entry.get("title"),
+                            entry.get("businessName"), entry.get("municipal"))
                 stats["marked_inactive"] += 1
 
         # Detail fetches are one HTTP call per vacancy — fan them out concurrently
         # (I/O-bound, not CPU-bound) instead of one at a time, which made a
         # multi-hundred-item catch-up sync take minutes. DB writes stay on this
         # thread; worker threads only ever touch the network, never `conn`.
+        page_detail_errors = 0
+        failures_before = dict(failures)
         if active_uuids:
             with concurrent.futures.ThreadPoolExecutor(max_workers=DETAIL_FETCH_WORKERS) as pool:
                 future_to_uuid = {pool.submit(_fetch_ad_detail, token, u): u for u in active_uuids}
@@ -109,17 +156,60 @@ def sync(conn: sqlite3.Connection) -> dict:
                     uuid = future_to_uuid[future]
                     try:
                         ad = future.result()
-                    except requests.RequestException as e:
-                        logger.warning(f"Skipping {uuid}: detail fetch failed ({e})")
-                        stats["detail_missing"] += 1
+                    except (requests.RequestException, ValueError) as e:
+                        # ValueError: a 200 whose body is not valid JSON —
+                        # transient like a 5xx (and capped the same way).
+                        logger.warning(f"Detail fetch failed for {uuid} ({e})")
+                        if _is_permanent_detail_error(e):
+                            stats["detail_missing"] += 1
+                        elif failures.get(uuid, 0) >= MAX_DETAIL_HOLDS:
+                            logger.warning(
+                                f"Giving up on {uuid}: detail failed on {MAX_DETAIL_HOLDS} "
+                                f"consecutive held syncs; counting it as missing so the cursor can advance."
+                            )
+                            stats["detail_missing"] += 1
+                        else:
+                            failures[uuid] = failures.get(uuid, 0) + 1
+                            page_detail_errors += 1
                         continue
+                    failures.pop(uuid, None)
                     if ad is None:
+                        # No content is a stable answer, not a transient
+                        # failure: skip it, retrying would never change it.
                         stats["detail_missing"] += 1
                         continue
+                    # Read the stored content before the upsert so we can tell
+                    # "changed" from "re-sent identical" (db.py's upsert only
+                    # returns is_new). Compared against json.dumps(ad), which is
+                    # exactly what upsert_active_vacancy stores in raw_json.
+                    prev = conn.execute(
+                        "SELECT raw_json FROM vacancies WHERE uuid = ?", (uuid,)
+                    ).fetchone()
                     if upsert_active_vacancy(conn, uuid, "ACTIVE", ad):
                         stats["new"] += 1
+                    elif prev is None:
+                        pass  # dismissed uuid: nothing was written, nothing to count
+                    elif prev[0] == json.dumps(ad):
+                        stats["unchanged"] += 1
                     else:
                         stats["updated"] += 1
+
+        if failures != failures_before:
+            _save_failures(conn, failures)
+
+        if page_detail_errors:
+            # A transient detail failure used to only bump detail_missing, and
+            # then the cursor moved past the sealed page below — that ad was
+            # never fetched again (reproduced 2026-10-05). Keep the cursor on
+            # THIS page (it still names the page to be read, so the
+            # "cursor = page still to read" invariant holds) and stop; the
+            # next sync re-reads it. Re-processing is idempotent.
+            stats["detail_errors"] += page_detail_errors
+            logger.warning(
+                f"{page_detail_errors} detail fetch(es) failed on page {page.get('id')}; "
+                f"cursor held there so the next sync retries it."
+            )
+            break
 
         next_id = page.get("next_id")
         if not next_id:
@@ -134,6 +224,12 @@ def sync(conn: sqlite3.Connection) -> dict:
         # strand the whole feed for two days (2026-08-31 → 09-02, 12 pages /
         # 10 375 entries queued up while every sync reported "+0 new").
         set_state(conn, CURSOR_KEY, next_id)
+        # Pruned once the page is passed (given-up uuids included) so the
+        # counter dict can't grow without bound.
+        if any(u in failures for u in active_uuids):
+            for u in active_uuids:
+                failures.pop(u, None)
+            _save_failures(conn, failures)
         url = f"{BASE_URL}/api/v1/feed/{next_id}"
 
     return stats

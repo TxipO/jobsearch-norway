@@ -91,3 +91,68 @@ def test_main_warns_when_extraction_is_near_empty(tmp_path, monkeypatch, capsys)
     captured = capsys.readouterr()
     assert "WARNING" in captured.out
     assert "no real selectable text" in captured.out
+
+
+def _blank_pdf(path):
+    from pypdf import PdfWriter
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    with open(path, "wb") as f:
+        writer.write(f)
+
+
+def test_placing_docx_removes_stale_pdf_but_keeps_txt(tmp_path, monkeypatch):
+    """2026-10-05 (stale-CV class, cf. 2026-08-30 incident): an older cv.pdf
+    left next to a newly placed cv.docx would stay the final deliverable,
+    since generate_documents.py never touches an existing cv.pdf."""
+    _fake_vacancy_present(monkeypatch)
+    monkeypatch.setattr(place_cv, "OUT_ROOT", tmp_path / "generated")
+    out_dir = tmp_path / "generated" / "vac-1"
+    out_dir.mkdir(parents=True)
+    (out_dir / "cv.pdf").write_bytes(b"OLD stale pdf")
+
+    doc = Document()
+    doc.add_paragraph("Fresh CV text.")
+    src = tmp_path / "new.docx"
+    doc.save(str(src))
+
+    place_cv.place_cv("vac-1", src)
+
+    assert (out_dir / "cv.docx").exists()
+    assert not (out_dir / "cv.pdf").exists()
+    assert "Fresh CV text." in (out_dir / "cv.txt").read_text(encoding="utf-8")
+
+
+def test_placing_pdf_removes_stale_docx(tmp_path, monkeypatch):
+    _fake_vacancy_present(monkeypatch)
+    monkeypatch.setattr(place_cv, "OUT_ROOT", tmp_path / "generated")
+    out_dir = tmp_path / "generated" / "vac-2"
+    out_dir.mkdir(parents=True)
+    Document().save(str(out_dir / "cv.docx"))
+
+    src = tmp_path / "new.pdf"
+    _blank_pdf(src)
+
+    place_cv.place_cv("vac-2", src)
+
+    assert (out_dir / "cv.pdf").exists()
+    assert not (out_dir / "cv.docx").exists()
+
+
+def test_replacing_a_cv_in_situ_handles_same_file(tmp_path, monkeypatch):
+    """Source already is generated/<slug>/cv.docx -> shutil.SameFileError;
+    must not crash, must still refresh cv.txt and drop the stale sibling."""
+    _fake_vacancy_present(monkeypatch)
+    monkeypatch.setattr(place_cv, "OUT_ROOT", tmp_path / "generated")
+    out_dir = tmp_path / "generated" / "vac-3"
+    out_dir.mkdir(parents=True)
+    doc = Document()
+    doc.add_paragraph("Edited in place.")
+    doc.save(str(out_dir / "cv.docx"))
+    (out_dir / "cv.pdf").write_bytes(b"stale")
+
+    dest = place_cv.place_cv("vac-3", out_dir / "cv.docx")
+
+    assert dest == out_dir / "cv.docx"
+    assert not (out_dir / "cv.pdf").exists()
+    assert "Edited in place." in (out_dir / "cv.txt").read_text(encoding="utf-8")

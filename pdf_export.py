@@ -39,6 +39,18 @@ def convert_to_pdf(docx_path: Path) -> Path | None:
         print(f"PDF:    skipped for {docx_path.name} — LibreOffice (soffice) not found")
         return None
 
+    # Delete any existing target first (2026-10-05 audit): soffice overwrites
+    # silently, so a leftover PDF from an earlier run made the
+    # "soffice reported success but no pdf" check below unable to fire — a
+    # failed conversion would hand back the STALE pdf as if it were fresh.
+    pdf_path = docx_path.with_suffix(".pdf")
+    try:
+        pdf_path.unlink(missing_ok=True)
+    except OSError as e:
+        # Typically Windows: the old PDF is open in a viewer.
+        print(f"PDF:    can't replace {pdf_path.name} ({e}) — close it and retry")
+        return None
+
     try:
         subprocess.run(
             [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(docx_path.parent), str(docx_path)],
@@ -48,7 +60,6 @@ def convert_to_pdf(docx_path: Path) -> Path | None:
         print(f"PDF:    conversion failed for {docx_path.name} — {e}")
         return None
 
-    pdf_path = docx_path.with_suffix(".pdf")
     if not pdf_path.exists():
         print(f"PDF:    soffice reported success but {pdf_path.name} wasn't found")
         return None

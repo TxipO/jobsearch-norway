@@ -23,6 +23,9 @@ Design decisions (agreed with the user 2026-07-17, "вони нам не тре�
 """
 
 import re
+from bisect import bisect_right
+
+from textnorm import normalize_text
 
 # Health professions requiring authorisation under helsepersonelloven.
 # Norwegian authorisation requires a recognised education; the user's diploma
@@ -50,7 +53,9 @@ HEALTH_TITLE_PATTERNS = [
     r"fastlege", r"tilsynslege", r"fylkeslege", r"kommunelege",
     r"kommuneoverlege", r"sykehjemslege", r"distriktslege",
     r"allmennlege", r"turnuslege",
-    r"\btannlege", r"\btannpleier", r"\btannhelsesekret",
+    # (?!assistent): "Tannlegeassistent" is unauthorised support work
+    # (2026-10-05, /fullreview deep) — unlike tannpleier/tannhelsesekretær.
+    r"\btannlege(?!assistent)", r"\btannpleier", r"\btannhelsesekret",
     r"\bfysioterapeut", r"\bergoterapeut",
     # jordmor/psykolog/farmasøyt/bioingeniør dropped their leading \b
     # 2026-08-30 (/fullreview deep, Stage 4) — same compound-word reasoning
@@ -60,8 +65,18 @@ HEALTH_TITLE_PATTERNS = [
     # against the full live corpus (85 distinct titles across the four),
     # every match a genuine authorisation-gated role.
     r"jordmor", r"jordmødre",
-    r"psykolog", r"farmasøyt", r"bioingeniør", r"\bradiograf",
-    r"\bambulanse", r"\bparamedic", r"\boptiker", r"\bkiropraktor",
+    # 2026-10-05 (/fullreview deep): "psykolog(?!i)" — "Studiekonsulent ved
+    # Institutt for psykologi" is an admin job at a department, the subject
+    # noun "psykologi" is not the profession. "farmasøyt(?!isk)" — the
+    # adjective "farmasøytisk" in "Produksjonsoperatør farmasøytisk
+    # industri" / "Lagermedarbeider farmasøytisk grossist" names the
+    # employer's sector (warehouse/production = wanted jobs), not an
+    # authorised pharmacist. "ambulanse(?!stasjon)" — "Renholder ved
+    # ambulansestasjonen" is a cleaner at a workplace. Compounds like
+    # kommunepsykolog/provisorfarmasøyt are untouched (the lookaheads only
+    # fire on the exact false-block suffixes).
+    r"psykolog(?!i)", r"farmasøyt(?!isk)", r"bioingeniør", r"\bradiograf",
+    r"\bambulanse(?!stasjon)", r"\bparamedic", r"\boptiker", r"\bkiropraktor",
     r"\bhelsesykepleier", r"\bhelsesjukepleiar", r"\bmiljøterapeut",
     r"\bsosionom", r"\bbarnevernspedagog", r"\bhjelpepleier",
 ]
@@ -69,7 +84,13 @@ HEALTH_TITLE_PATTERNS = [
 # Teaching / pedagogical posts requiring formal Norwegian pedagogical
 # qualification (godkjent lærerutdanning).
 TEACHING_TITLE_PATTERNS = [
-    r"\blærer\b", r"\blærar\b", r"\blærere\b", r"\blærarar\b",
+    # "lærer" is also the VERB ("Vi lærer deg opp som lagermedarbeider" —
+    # 2026-10-05, /fullreview deep): skip it when a pronoun subject precedes
+    # and deg/dem/opp/bort follows. Deliberately NOT exempting a bare
+    # "lærer på ..." — that is the real noun title ("Lærer på ungdomstrinnet")
+    # and must stay blocked.
+    r"(?<!\bvi )(?<!\bdu )(?<!\bde )(?<!\bman )\blærer\b(?!\s+(?:deg|dem|opp|bort)\b)",
+    r"\blærar\b", r"\blærere\b", r"\blærarar\b",
     r"\blærervikar", r"\blærarvikar",
     r"\badjunkt", r"\blektor",
     r"\bbarnehagelærer", r"\bbarnehagelærar",
@@ -85,7 +106,11 @@ ACADEMIC_TITLE_PATTERNS = [
     # was missed on every one of dozens of live postings.
     r"stipendiat", r"\bpostdoktor", r"\bpostdoc",
     r"\bprofessor", r"\bførsteamanuensis", r"\bamanuensis",
-    r"\bforsker\b", r"\bforskar\b", r"\bresearcher\b",
+    # Security/threat/UX researcher exempted (2026-10-05, /fullreview deep):
+    # security is the user's secondary track and these roles are not PhD
+    # posts. Bare "researcher"/"senior researcher" stays blocked.
+    r"\bforsker\b", r"\bforskar\b",
+    r"(?<!security )(?<!threat )(?<!ux )\bresearcher\b",
     r"\bph\.?d\b",
     # University/college-level "lektor" — added 2026-08-30 (/fullreview
     # deep, Stage 4). Deliberately here, not TEACHING_TITLE_PATTERNS's bare
@@ -192,7 +217,11 @@ LEGAL_FINANCE_TITLE_PATTERNS = [
     # "virksomhetsjurist" (in-house/corporate jurist) were all missed;
     # checked against the live corpus, every compound genuinely requires a
     # law degree/bar admission.
-    r"advokat", r"jurist", r"\brevisor", r"\bregnskapsfører",
+    # advokat(?!sekretær|assistent|firma|kontor): a law-firm's secretary/
+    # assistant/receptionist ("Advokatsekretær", "Kontormedarbeider
+    # advokatfirma", "Resepsjonist advokatkontor") needs no bar admission
+    # (2026-10-05, /fullreview deep). "advokatfullmektig" stays blocked.
+    r"advokat(?!sekretær|sekretar|assistent|firma|kontor)", r"jurist", r"\brevisor", r"\bregnskapsfører",
     r"\brekneskapsførar",
     # "Juridisk rådgiver" (legal advisor) — same law-degree requirement as
     # "jurist" but a different word (adjective, not the noun "jurist"), so
@@ -232,7 +261,11 @@ POLICE_TITLE_PATTERNS = [
 # Vg2 child and youth worker subject" as a hard requirement). This was
 # previously scored as an entry-level BONUS in scoring.py, which was
 # backwards — fixed 2026-07-17 alongside this block category.
-APPRENTICESHIP_TITLE_PATTERNS = [r"lærling", r"læreplass"]
+# lærling(?!ansvarlig|koordinator|ordning) — the staff roles that ADMINISTER
+# apprenticeships ("Lærlingansvarlig", "Lærlingkoordinator", "Rådgiver
+# lærlingordning") are not apprenticeships (2026-10-05, /fullreview deep).
+# Plural "lærlinger søkes" stays blocked.
+APPRENTICESHIP_TITLE_PATTERNS = [r"lærling(?!ansvarlig|koordinator|ordning)", r"læreplass"]
 
 BLOCK_CATEGORIES = [
     ("helseautorisasjon", HEALTH_TITLE_PATTERNS, "Потрібна норвезька авторизація медпрацівника"),
@@ -261,14 +294,31 @@ BODY_AUTHORISATION_PATTERNS = [
     # FOR an authorised professional. Matches both "du har norsk autorisasjon
     # som sykepleier" and a bare bullet "autorisasjon som sykepleier".
     r"autorisasjon som (sykepleier|sjukepleiar|helsefagarbeider|vernepleier|lege|fysioterapeut)",
-    # Generic "authorisation required" — but NOT the conditional
-    # "autorisasjon kreves for søkere som er sykepleiere..." shape, which only
-    # requires it IF you happen to be a nurse, on a posting also open to
-    # assistants (live false positive 2026-07-17, Otium tilkallingsvikar).
-    r"krever (norsk )?autorisasjon(?! for søkere)(?! for deg som)",
-    r"må ha (norsk )?autorisasjon(?! for søkere)(?! for deg som)",
     r"godkjent autorisasjon fra helsedirektoratet",
 ]
+
+# Generic "authorisation required" — but NOT the conditional
+# "autorisasjon kreves for søkere som er sykepleiere..." shape, which only
+# requires it IF you happen to be a nurse, on a posting also open to
+# assistants (live false positive 2026-07-17, Otium tilkallingsvikar).
+# Split out of BODY_AUTHORISATION_PATTERNS 2026-10-05 (/fullreview deep):
+# the whole module is about HEALTH authorisation (helsepersonelloven), but
+# these two had no health noun at all, so "Du må ha autorisasjon for tilgang
+# til driftsmiljøet" (IT access rights — the user's own target field) and
+# "Arbeidet krever autorisasjon fra DSB for elvirksomhet" were blocked as if
+# they were nurse ads. They now only count with a health-profession term
+# within ~150 chars either side (_HEALTH_CONTEXT_RE), and never in an
+# access ("tilgang") clause.
+BODY_GENERIC_AUTHORISATION_PATTERNS = [
+    r"krever (norsk )?autorisasjon(?! for søkere)(?! for deg som)",
+    r"må ha (norsk )?autorisasjon(?! for søkere)(?! for deg som)",
+]
+_HEALTH_CONTEXT_RE = re.compile(
+    r"helsepersonell|\bhpr\b|helsedirektorat|sykepleier|sjukepleiar|helsefagarbeid|"
+    r"vernepleier|\blege\b|\blegar\b|fysioterapeut|ergoterapeut|jordmor|psykolog|"
+    r"tannlege|tannpleier|farmasøyt|bioingeniør|hjelpepleier|omsorgsarbeider|"
+    r"ambulansearbeider|radiograf|optiker|kiropraktor|sosionom|barnevernspedagog"
+)
 
 # Norwegian government/defense security clearance (sikkerhetsklarering) —
 # requires Norwegian citizenship in practice (sikkerhetsloven), unreachable
@@ -321,6 +371,17 @@ SECURITY_CLEARANCE_RE = re.compile(
 )
 
 
+# Employer-wide "SOME positions may need X" disclaimer. Widened 2026-10-05
+# (/fullreview deep) from the literal "enkelte stillinger" to
+# enkelte/noen/visse (+ optional "av"/"av våre") directly before "stilling":
+# "Noen av stillingene i Forsvaret krever sikkerhetsklarering", "For visse
+# stillinger er det krav til sikkerhetsklarering" are the same boilerplate.
+# Kept adjacent (no free gap) so "Vi søker noen til stillingen" can't match.
+_SOME_POSITIONS_RE = re.compile(
+    r"\b(?:enkelte|noen|visse)\b(?:\s+av(?:\s+(?:våre|de|disse|alle))?)?\s+stilling"
+)
+
+
 def _has_definite_security_clearance_requirement(text: str) -> bool:
     """Live false-positive risk found auditing 164 real matches (2026-07-18):
     24 of them were the generic disclaimer "enkelte stillinger vil kunne
@@ -328,11 +389,20 @@ def _has_definite_security_clearance_requirement(text: str) -> bool:
     require clearance") on completely unrelated postings (Tannpleier,
     Arealplanlegger, Prosjektledere at a fylkeskommune) — boilerplate about
     the employer at large, not a requirement of THIS job. Only counts a
-    match as definite when "enkelte stillinger" doesn't appear shortly
-    before it."""
+    match as definite when no enkelte/noen/visse-stillinger quantifier
+    appears shortly before it.
+
+    2026-10-05 (/fullreview deep): each match is also judged inside its own
+    clause — "Det stilles ikke krav til sikkerhetsklarering", "Du trenger
+    ikke å inneha sikkerhetsklarering", "Det er en fordel å inneha
+    sikkerhetsklarering", "...er ønskelig, men ikke et krav" were all
+    blocked, because the regex only sees the noun phrase and was blind to
+    negation/softeners around it."""
     for m in SECURITY_CLEARANCE_RE.finditer(text):
-        before = text[max(0, m.start() - 60):m.start()]
-        if "enkelte stillinger" not in before:
+        before = text[max(0, m.start() - 80):m.start()]
+        if _SOME_POSITIONS_RE.search(before):
+            continue
+        if _match_is_firm(text, m):
             return True
     return False
 
@@ -352,6 +422,19 @@ def _has_definite_security_clearance_requirement(text: str) -> bool:
 # phrase appears in exactly 1 of ~5000 active, non-excluded vacancies —
 # this one.
 EU_PASSPORT_REQUIREMENT_RE = re.compile(r"eu[\s-]?passport", re.I)
+# "No EU passport is required" / "EU passport is not required" (2026-10-05,
+# /fullreview deep) states the opposite of the tell this check looks for.
+_NOT_REQUIRED_AFTER_RE = re.compile(r"\b(?:is|are)\s+(?:not|no longer)\s+(?:required|needed|necessary)\b")
+
+
+def _has_eu_passport_requirement(text: str) -> bool:
+    for m in EU_PASSPORT_REQUIREMENT_RE.finditer(text):
+        cs, ce = _clause_bounds(text, m.start(), m.end())
+        if _NOT_REQUIRED_AFTER_RE.search(text[m.end():ce]):
+            continue
+        if _match_is_firm(text, m):
+            return True
+    return False
 
 
 # Truckførerbevis (forklift certificate) — added 2026-08-26 at the user's
@@ -399,18 +482,39 @@ REQUIREMENT_HEADING_RE = re.compile(
     # right above it. Live miss 2026-09-02: an English forklift ad listed
     # "Valid T4 forklift license" under exactly this line, so the licence
     # requirement read as unsectioned prose and the ad stayed visible.
-    r"we are looking for someone who(?:\s+\w+)*|"
+    # The trailing colon is MANDATORY here (2026-10-05, /fullreview deep):
+    # without it the alternative swallowed a whole one-line sentence
+    # ("We are looking for someone who must have a valid forklift
+    # certificate") as a heading, and iter_requirement_clauses `continue`s
+    # on headings, so the requirement itself was never read — a regression
+    # from dce4f32. A genuine heading is short ("...someone who has:").
+    r"we are looking for someone who(?:\s+\w+){0,3}\s*:|"
     r"skills?\s*(?:&|and)\s*experience)\s*[:–-]*$"
 )
 OPTIONAL_HEADING_RE = re.compile(
     r"^(?:ønskede kvalifikasjoner|ønskelige kvalifikasjoner|ønskelig|"
     r"ønsket kompetanse|fordelaktig|det er en fordel(?:\s+om du har)?|vi ser gjerne|"
     r"personlige egenskaper|vi tilbyr|vi kan tilby|arbeidsoppgaver|"
-    r"om stillingen|andre ønsker|fordeler)\s*[:–-]*$"
+    r"om stillingen|andre ønsker|fordeler|"
+    # "Vi tilbyr deg:" / "Hos oss får du:" / "Om oss:" (2026-10-05,
+    # /fullreview deep): benefit/employer-intro sections were not recognised,
+    # so "Opplæring og truckførerbevis (T4)" listed as a perk under them
+    # stayed in the preceding requirement section and blocked the ad.
+    r"vi tilbyr deg|hos oss får du|om oss)\s*[:–-]*$"
     r"|^(?:we offer|responsibilities|nice to have|preferred qualifications|benefits|"
     r"personal qualities|what we offer|desired qualifications)\s*[:–-]*$"
 )
-_CLAUSE_SPLIT_RE = re.compile(r"(?<![0-9])\.(?![0-9])|[;!?]")
+# A dot ends a sentence unless it sits BETWEEN digits ("1.5", "31.12.2026").
+# The old `(?<![0-9])\.(?![0-9])` also refused to split after a digit at a
+# sentence end, so "Krav: truckførerbevis T4. Vi tilbyr gode fordeler." stayed
+# ONE clause and the second sentence's softener disarmed the requirement
+# (2026-10-05, /fullreview deep). The second alternative splits a
+# digit-then-dot only when whitespace/end follows ("T4. Vi", "31.12. Vi").
+# Side effect, accepted: a numbered-list marker "1. Foo" now splits into "1"
+# and "Foo" — harmless, section state is per line, not per clause.
+_CLAUSE_SPLIT_RE = re.compile(r"(?<![0-9])\.(?![0-9])|(?<=[0-9])\.(?=\s|$)|[;!?]")
+# Same boundaries plus line breaks — for locating the clause around a match.
+_CLAUSE_OR_LINE_RE = re.compile(r"\n|" + _CLAUSE_SPLIT_RE.pattern)
 
 
 def iter_requirement_clauses(body_l: str):
@@ -456,17 +560,31 @@ REQUIREMENT_VERB_RE = re.compile(
     # matters in a clause that already contains a specific mention pattern.
     r"\bvalid\b"
 )
+# Degree-style equivalence alternatives ("X eller tilsvarende"). They soften a
+# FORMAL-QUALIFICATION requirement (a degree OR equivalent is still a
+# requirement of something) but must not cancel a years/management/fluency
+# penalty: "minimum 3 års erfaring fra lager eller tilsvarende" still asks
+# for 3 years (review 2026-10-05). has_optional_marker(include_equivalence=
+# False) leaves them out.
+_EQUIVALENCE_RE = re.compile(
+    r"eller tilsvarende|eller tilsvarande|eller liknende|eller lignende|"
+    r"eller realkompetanse|eller relevant erfaring|eller erfaring|eller lang erfaring|"
+    r"or equivalent"
+)
 # A softener anywhere in the clause wins even under a requirements heading
 # ("Kvalifikasjoner: ... truckførerbevis er en fordel, men ikke et krav" —
 # measured live, ~55 of 118 truckfør-mentioning ads use exactly this shape).
-OPTIONAL_MARKER_RE = re.compile(
-    r"gjerne|ønskelig|ønskjeleg|fordel|fordelaktig|pluss\b|positivt|"
+_OPTIONAL_MARKER_CORE_RE = re.compile(
+    # "fordel" used to be a bare substring, so "Vi tilbyr gode fordeler"
+    # (benefits) and "fordelt på" (distributed) softened any requirement in
+    # the same clause (2026-10-05, /fullreview deep). Now only the singular
+    # advantage: "fordel", "fordelen", "fordelaktig(e)", and compounds
+    # ("konkurransefordel") — right-anchored, no left \b on purpose.
+    r"gjerne|ønskelig|ønskjeleg|fordel(?:en|aktig\w*)?\b|pluss\b|positivt|"
     r"ikke\s+(?:\w+\s+)?krav|ikkje\s+(?:\w+\s+)?krav|ikke en forutsetning|"
     r"ikke noe must|bør ha|manglar du|mangler du|ikke nødvendig|kjekt om|"
     r"et ønske|kan veie opp|kan kompensere|"
-    r"eller tilsvarende|eller tilsvarande|eller liknende|eller lignende|"
-    r"eller realkompetanse|eller relevant erfaring|eller erfaring|eller lang erfaring|"
-    r"an advantage|considered an advantage|is a plus|preferred\b|or equivalent|"
+    r"an advantage|considered an advantage|is a plus|preferred\b|"
     r"nice to have|not required|desirable|training (?:can|will) be provided|we will train|"
     # Direct negation of the requirement verb itself ("trenger ikke X",
     # "krever ikke X") — added 2026-08-30 (/fullreview deep, Stage 4):
@@ -477,6 +595,7 @@ OPTIONAL_MARKER_RE = re.compile(
     # edge case.
     r"trenger ikke|trengs ikke|krever ikke|kreves ikke"
 )
+OPTIONAL_MARKER_RE = re.compile(f"(?:{_OPTIONAL_MARKER_CORE_RE.pattern})|(?:{_EQUIVALENCE_RE.pattern})")
 _PARENS_RE = re.compile(r"\([^)]*\)")
 
 # A qualifier hanging off the END of a requirement softens the detail it
@@ -492,14 +611,103 @@ _PARENS_RE = re.compile(r"\([^)]*\)")
 _TRAILING_QUALIFIER_RE = re.compile(r",\s*(?:gjerne|helst|fortrinnsvis|ideelt sett|primært)\b.*$")
 
 
-def has_optional_marker(clause: str) -> bool:
+def has_optional_marker(clause: str, include_equivalence: bool = True) -> bool:
     """Is this clause softened as a whole? Ignores softeners that only
     qualify a trailing or parenthesised detail. Shared by every soft/hard
     decision (hard_blocks' truckfør/forklift checks and scoring.py's
     car/formal-qualification/programming checks) so the scoping rule can't
-    drift between them — it used to live inline in one of the five."""
+    drift between them — it used to live inline in one of the five.
+    `include_equivalence=False` ignores "eller tilsvarende"-style
+    alternatives (see _EQUIVALENCE_RE) — used by the years/management/fluency
+    penalties, where an equivalence does not make the requirement optional."""
     scoped = _TRAILING_QUALIFIER_RE.sub("", _PARENS_RE.sub(" ", clause))
-    return bool(OPTIONAL_MARKER_RE.search(scoped))
+    return bool((OPTIONAL_MARKER_RE if include_equivalence else _OPTIONAL_MARKER_CORE_RE).search(scoped))
+
+
+# Boundaries between independent claims inside one clause. A softener only
+# softens the claim it sits in: "Du må kunne sikkerhetsklareres for hemmelig
+# og det er en fordel med erfaring fra Forsvaret" requires the clearance and
+# merely prefers the experience (review 2026-10-05).
+_SEGMENT_SPLIT_RE = re.compile(r",|;|\bog\b|\bmen\b|\bbut\b|\band\b")
+
+
+def has_optional_marker_near(clause: str, start: int, end: int, include_equivalence: bool = True) -> bool:
+    """has_optional_marker restricted to the sub-segment of `clause` (split
+    on , ; og men but and) that contains the span [start, end). Parenthesised
+    text is blanked first (same length, so offsets hold) so a comma inside
+    parentheses doesn't cut a segment in half."""
+    blanked = _PARENS_RE.sub(lambda m: " " * len(m.group()), clause)
+    seg_start, seg_end = 0, len(blanked)
+    for cut in _SEGMENT_SPLIT_RE.finditer(blanked):
+        if cut.end() <= start:
+            seg_start = cut.end()
+        elif cut.start() >= end:
+            seg_end = cut.start()
+            break
+    return has_optional_marker(blanked[seg_start:seg_end], include_equivalence)
+
+
+def _clause_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """(start, end) of the clause (sentence within a line) containing the
+    span [start, end) — same boundaries iter_requirement_clauses splits on."""
+    cuts = list(_CLAUSE_OR_LINE_RE.finditer(text))
+    ends = [c.end() for c in cuts]
+    i = bisect_right(ends, start)
+    cs = ends[i - 1] if i else 0
+    ce = len(text)
+    for c in cuts:
+        if c.start() >= end:
+            ce = c.start()
+            break
+    return cs, ce
+
+
+# Negation in the text BEFORE a mention, within its own clause segment, but
+# only the explicit "no requirement" phrasings that GOVERN the requirement
+# ("Det stilles ikke krav til X", "Ingen krav om X", "Du trenger ikke å
+# inneha X"). A bare ikke/uten/ingen is not enough: "Søkere uten norsk
+# autorisasjon vil ikke bli vurdert" and "Det er ikke mulig å tiltre
+# stillingen uten autorisasjon" are FIRM requirements (double negatives,
+# review 2026-10-05). Only the segment after the last comma / "men" / "but"
+# counts, so "Stillingen er ikke deltid, men krever X" stays firm.
+_NEGATION_BEFORE_RE = re.compile(
+    r"\bikke\s+(?:et\s+|noe\s+)?krav|\bikkje\s+(?:et\s+|noko\s+|noe\s+)?krav|"
+    r"\bingen\s+(?:\w+\s+)?krav|\bintet\s+krav|\buten\s+krav|\bstilles\s+ikke|"
+    r"\b(?:vil|skal)\s+ikke\s+kreve|\bkrever\s+ikke|\bkreves\s+ikke|"
+    r"\btrenger\s+ikke|\btrengs\s+ikke|\bikke\s+nødvendig|\bikke\s+påkrevd"
+)
+# English negators are only trusted in the last ~3 words before the match
+# ("No EU passport", "does not require an EU passport"). Bare "no" is Nynorsk
+# for "now" ("Vi søkjer no ein IT-konsulent som må kunne sikkerhetsklareres" —
+# very common in Vestland ads), and an "English" negator earlier in a long
+# clause says nothing about the match (follow-up 2026-10-05, /fullreview deep).
+_NEGATION_EN_NEAR_RE = re.compile(r"\b(?:no|not|without)\b")
+_NEGATION_EN_WINDOW_WORDS = 3
+_NEGATION_SEGMENT_SPLIT_RE = re.compile(r",|\bmen\b|\bbut\b")
+
+
+def _match_is_firm(text: str, m: "re.Match[str]") -> bool:
+    """Is the body-level pattern match `m` stated as a firm requirement?
+    Judges the match inside its own clause: false when the clause carries a
+    softener in its own sub-segment (has_optional_marker_near: "en fordel",
+    "ønskelig, men ikke et krav")
+    or the match is negated. Added 2026-10-05 (/fullreview deep) — the
+    body-level clearance/authorisation/EU-passport checks used to be bare
+    regex hits, blind to "ikke krav om ...", "en fordel med ...", "No EU
+    passport is required"."""
+    cs, ce = _clause_bounds(text, m.start(), m.end())
+    # Only a softener in the match's OWN sub-segment counts (see
+    # has_optional_marker_near).
+    if has_optional_marker_near(text[cs:ce], m.start() - cs, m.end() - cs):
+        return False
+    before = _NEGATION_SEGMENT_SPLIT_RE.split(text[cs:m.start()])[-1]
+    # The phrase may run INTO the match ("Ingen krav om X": the match starts
+    # at "krav"), so search before + matched text, keeping hits that begin
+    # before the match.
+    if any(n.start() < len(before) for n in _NEGATION_BEFORE_RE.finditer(before + text[m.start():m.end()])):
+        return False
+    near = " ".join(before.split()[-_NEGATION_EN_WINDOW_WORDS:])
+    return not _NEGATION_EN_NEAR_RE.search(near)
 
 
 def _has_unmet_requirement(mention_re, clauses, training_re=None, title_l=None):
@@ -592,6 +800,31 @@ def _has_unmet_forklift_certificate_requirement(title_l: str, body_l: str) -> bo
 # hide what we can't confidently judge).
 LOW_EXTENT_FAR_THRESHOLD = 60
 
+def _has_body_authorisation_requirement(body_l: str) -> bool:
+    """Body-level authorisation requirement. Every hit is judged in its own
+    clause (negation / softener / "enkelte-noen-visse stillinger"
+    employer-wide disclaimer) via _match_is_firm — "Ingen krav om
+    autorisasjon som sykepleier", "Det er en fordel med autorisasjon som
+    helsefagarbeider" are not requirements (2026-10-05, /fullreview deep).
+    The generic "krever/må ha autorisasjon" alternatives additionally need a
+    health-profession term nearby and may not be an access ("tilgang")
+    clause — see BODY_GENERIC_AUTHORISATION_PATTERNS."""
+    for pattern in BODY_AUTHORISATION_PATTERNS + BODY_GENERIC_AUTHORISATION_PATTERNS:
+        generic = pattern in BODY_GENERIC_AUTHORISATION_PATTERNS
+        for m in re.finditer(pattern, body_l):
+            if _SOME_POSITIONS_RE.search(body_l[max(0, m.start() - 80):m.start()]):
+                continue
+            if not _match_is_firm(body_l, m):
+                continue
+            if generic:
+                cs, ce = _clause_bounds(body_l, m.start(), m.end())
+                if "tilgang" in body_l[cs:ce]:
+                    continue
+                if not _HEALTH_CONTEXT_RE.search(body_l[max(0, m.start() - 150):m.end() + 150]):
+                    continue
+            return True
+    return False
+
 
 def check_exclusion(
     title: str | None,
@@ -600,7 +833,7 @@ def check_exclusion(
     extent_percent: int | None = None,
 ) -> tuple[bool, str | None]:
     """Returns (is_excluded, human-readable reason in Ukrainian)."""
-    title_l = (title or "").lower()
+    title_l = normalize_text(title).lower()
 
     for _key, patterns, reason in BLOCK_CATEGORIES:
         for pattern in patterns:
@@ -615,15 +848,14 @@ def check_exclusion(
     ):
         return True, f"Поза Vestland і лише {extent_percent}% ставки — переїзд економічно нереальний"
 
-    body_l = (description_text or "").lower()
-    for pattern in BODY_AUTHORISATION_PATTERNS:
-        if re.search(pattern, body_l):
-            return True, "В описі прямо вимагається норвезька авторизація"
+    body_l = normalize_text(description_text).lower()
+    if _has_body_authorisation_requirement(body_l):
+        return True, "В описі прямо вимагається норвезька авторизація"
 
     if _has_definite_security_clearance_requirement(body_l):
         return True, "Потрібен допуск до державної таємниці (sikkerhetsklarering) — недосяжно без громадянства"
 
-    if EU_PASSPORT_REQUIREMENT_RE.search(body_l):
+    if _has_eu_passport_requirement(body_l):
         return True, "Вакансія фізично за кордоном (вимагає EU passport), не в Норвегії"
 
     if _has_unmet_truckforerbevis_requirement(title_l, body_l):

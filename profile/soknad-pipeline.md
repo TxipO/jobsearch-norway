@@ -21,7 +21,7 @@
 | Правила, вивчені з правок | Obsidian `Claude Memory/jobsearch/Soknad-Rules.md` | Репозиторій: `profile/cv-reference.md` §5.1–5.2 |
 | Ринкові правила норвезького CV/søknad | `profile/cv-reference.md` §1–§7 | — |
 | Факти про кандидата | `profile_data.py`, `profile/profile.md` | — |
-| Технічні деталі про застосунки | пам'ять проєкту Budget `~/.claude/projects/C--Users-[winuser]-Budget/memory/` | — |
+| Технічні деталі про застосунки | пам'ять проєкту Budget `~/.claude/projects/<budget-project>/memory/` | — |
 | Попередні цикли | `Soknad-Log.md` | `profile/soknad-log.md` |
 
 **Перевірка доступності Obsidian:** `curl -s -k -m 5 -o /dev/null -w "%{http_code}" https://127.0.0.1:27124/ -H "Authorization: Bearer $KEY"`. Якщо не 200 — читаю з репозиторію і в кінці циклу синхронізую, коли Obsidian підніметься.
