@@ -206,7 +206,7 @@ def test_index_renders_nav_and_jobbnorge_error_banners(tmp_db):
 
 def test_sync_form_js_checks_response_ok():
     from pathlib import Path
-    tpl = (Path(web_app.__file__).parent / "templates" / "index.html").read_text()
+    tpl = (Path(web_app.__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
     assert "resp.ok" in tpl and "alert(" in tpl
 
 
