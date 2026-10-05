@@ -17,6 +17,7 @@ fact absent from the actual CV being sent alongside it. Falls back to
 profile.md when no per-vacancy CV exists yet.
 """
 
+import json
 from pathlib import Path
 
 from db import strip_html
@@ -237,7 +238,33 @@ def _candidate_profile_section(slug: str) -> str:
                 f"{cv_text}"
             )
     profile = (PROFILE_DIR / "profile.md").read_text(encoding="utf-8")
-    return f"=== ПРОФІЛЬ КАНДИДАТА (єдине джерело фактів) ===\n{profile}"
+    return f"=== ПРОФІЛЬ КАНДИДАТА (єдине джерело фактів) ===\n{profile}{_private_profile_facts()}"
+
+
+# Facts moved out of the public profile.md into gitignored personal.json
+# (2026-10-05): exact home village, household, residence status. profile.md
+# now carries `<home_village>` etc. as placeholders, so the prompt has to
+# re-supply the real values or the søknad would lose them.
+PRIVATE_PROFILE_FIELDS = (
+    ("home_village", "home_village (підставляй замість <home_village> у профілі)"),
+    ("household", "Житло й сім'я"),
+    ("residence_status", "Статус проживання (лише контекст — у CV/søknad НЕ згадувати)"),
+)
+
+
+def _private_profile_facts() -> str:
+    personal_path = PROFILE_DIR / "personal.json"
+    if not personal_path.exists():
+        return ""
+    personal = json.loads(personal_path.read_text(encoding="utf-8"))
+    lines = [
+        f"- {label}: {personal[key].strip()}"
+        for key, label in PRIVATE_PROFILE_FIELDS
+        if isinstance(personal.get(key), str) and personal[key].strip()
+    ]
+    if not lines:
+        return ""
+    return "\n\n=== ПРИВАТНІ ФАКТИ ПРОФІЛЮ (з personal.json) ===\n" + "\n".join(lines)
 
 
 def build_resume_prompt(

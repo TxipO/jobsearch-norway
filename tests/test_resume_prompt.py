@@ -147,3 +147,26 @@ def test_vacancy_description_is_fenced_as_untrusted_data():
     # The ad's own copy of the end marker can't close the fence early.
     assert text.count(resume_prompt.DESCRIPTION_END) == 1
     assert text.index("=== ФОРМАТ ВІДПОВІДІ ===") > end
+
+
+def test_profile_md_fallback_appends_private_facts_from_personal_json(tmp_path, monkeypatch):
+    """home_village/household/residence_status moved out of the public
+    profile.md into gitignored personal.json (2026-10-05) — the fallback
+    prompt must re-supply them, or the søknad silently loses them."""
+    import json
+    monkeypatch.setattr(resume_prompt, "PROFILE_DIR", tmp_path)
+    (tmp_path / "profile.md").write_text("Lives in <home_village>.", encoding="utf-8")
+    (tmp_path / "personal.json").write_text(json.dumps({
+        "home_village": "Testby", "household": "rented flat", "residence_status": "",
+    }), encoding="utf-8")
+    text = _prompt("en")
+    assert "ПРИВАТНІ ФАКТИ ПРОФІЛЮ" in text
+    assert "Testby" in text
+    assert "rented flat" in text
+    assert "Статус проживання" not in text  # empty values are omitted
+
+
+def test_profile_md_fallback_without_personal_json_has_no_private_section(tmp_path, monkeypatch):
+    monkeypatch.setattr(resume_prompt, "PROFILE_DIR", tmp_path)
+    (tmp_path / "profile.md").write_text("Generic profile facts.", encoding="utf-8")
+    assert "ПРИВАТНІ ФАКТИ ПРОФІЛЮ" not in _prompt("en")
