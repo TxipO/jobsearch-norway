@@ -938,6 +938,16 @@ def rescore_all(conn) -> dict:
 
     rows = db.iter_scorable_vacancies(conn)
     lender_lookup = _build_description_lender_lookup(rows)
+    # Rows hidden as a cross-source "Дублікат" going into this pass. Read
+    # BEFORE the loop: the loop resets every row's exclusion to its own
+    # hard-block verdict, which would otherwise erase this fact (see
+    # _keep_orphaned_duplicate_exclusions).
+    previously_duplicate = {
+        r[0] for r in conn.execute(
+            "SELECT uuid FROM vacancies WHERE status = 'ACTIVE' AND excluded = 1 "
+            "AND exclusion_reason LIKE 'Дублікат%'"
+        )
+    }
     excluded_count = 0
     all_candidates: list[dict] = []  # every scored row, for hard-block propagation + the dedup pass after
     for row in rows:
@@ -1028,6 +1038,7 @@ def rescore_all(conn) -> dict:
     dedup_candidates = [c for c in all_candidates if not c["excluded"]]
     duplicates_excluded = _exclude_cross_source_duplicates(conn, dedup_candidates)
     excluded_count += duplicates_excluded
+    excluded_count += _keep_orphaned_duplicate_exclusions(conn, all_candidates, previously_duplicate)
 
     return {"scored": len(rows), "excluded": excluded_count, "user_status_synced": user_status_synced}
 
@@ -1224,6 +1235,44 @@ _SOURCE_TIE_BREAK_PRIORITY = {
     "nav": 0, "jobbnorge": 1, "easycruit": 2, "finn": 3, "linkedin": 4,
     "work.ua": 5, "manual": 6,
 }
+
+
+def _keep_orphaned_duplicate_exclusions(conn, candidates: list[dict], previously_duplicate: set) -> int:
+    """A row hidden as "Дублікат" must stay hidden when its twin closes.
+
+    rescore_all only sees ACTIVE rows, so once the keeper (the NAV/Jobbnorge
+    twin) goes INACTIVE the group shrinks to one row, the dedup pass no
+    longer fires, and the finn/LinkedIn copy surfaces as a fresh "new"
+    listing for a job that is already closed — finn/LinkedIn rows are never
+    marked INACTIVE themselves (the digest re-parse forces ACTIVE), so
+    nothing else would ever hide it again until the 60-day retirement
+    (db.retire_stale_digest_rows). Found 2026-10-05 (/fullreview deep,
+    Stage 2 item 3 across time) and reproduced on master.
+
+    Only re-applies the exclusion to a row that WAS a duplicate going into
+    this pass and has no other-source twin left among the active rows; if
+    the twin is still there, _exclude_cross_source_duplicates has already
+    decided. Still reversible via the "show excluded" toggle."""
+    import db
+
+    sources_by_key: dict[tuple, set] = {}
+    for c in candidates:
+        sources_by_key.setdefault(c["key"], set()).add(c["source"])
+
+    kept = 0
+    for c in candidates:
+        if c["uuid"] not in previously_duplicate:
+            continue
+        if sources_by_key[c["key"]] - {c["source"]}:
+            continue  # a twin is still active — the normal dedup pass decides
+        row = db.get_vacancy(conn, c["uuid"])
+        if row is not None and not row["excluded"]:
+            db.set_exclusion(
+                conn, c["uuid"], True,
+                "Дублікат закритого оголошення — його двійник на іншому джерелі вже неактивний",
+            )
+            kept += 1
+    return kept
 
 
 def _exclude_cross_source_duplicates(conn, candidates: list[dict]) -> int:
