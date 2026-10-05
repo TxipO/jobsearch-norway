@@ -148,26 +148,25 @@ def test_soknad_shares_cv_margins_and_header_layout(tmp_path):
 
 
 def test_cv_shows_hobbies_from_personal_json(tmp_path):
-    """personal.json now has real hobbies (2026-07-20, synced from the
-    user's own updated reference resumes) — this locks in that non-empty
-    hobbies actually render as an Interests section, replacing the old
-    empty-hobbies assertion that stopped matching real data."""
+    """Non-empty hobbies in personal.json must render as an Interests
+    section. Uses the synthetic personal.json from conftest.py (2026-10-05:
+    this used to assert the real user's hobbies from the gitignored file)."""
     text = _cv_text(tmp_path, {})
     assert "INTERESTS" in text
-    assert "Martial arts (MMA)" in text
+    assert "Test chess" in text
 
 
 def test_norwegian_cv_shows_hobbies_no_not_english(tmp_path):
     """hobbies_no is a separate field from hobbies (2026-07-20) — the NO CV
     must use the Norwegian phrasing, not the English list untranslated."""
     text = _cv_text_no(tmp_path, {})
-    assert "Kampsport (MMA)" in text
-    assert "Martial arts (MMA)" not in text
+    assert "Testsjakk" in text
+    assert "Test chess" not in text
 
 
 def test_cv_header_uses_photo_table_when_photo_path_exists(tmp_path):
-    """personal.json's photo_path now points at a real file (2026-07-20) —
-    the header should switch to the 3-column photo/name/contact table
+    """personal.json's photo_path points at a real file (conftest's
+    synthetic 1x1 PNG) — the header should switch to the 3-column photo/name/contact table
     layout instead of the old plain two-paragraph header."""
     build_cv({}, tmp_path / "cv.docx")
     doc = Document(str(tmp_path / "cv.docx"))

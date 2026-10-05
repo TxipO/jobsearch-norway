@@ -1,8 +1,11 @@
 """CLI bridge between the tailoring JSON (returned by the model) and the
 søknad builder. Usage:
 
+    py generate_documents.py <uuid> [--lang no] --file tailoring.json
     py generate_documents.py <uuid> [--lang no] < tailoring.json
-    echo '<json>' | py generate_documents.py <uuid> [--lang no]
+
+--file is the shell-proof way (PowerShell has no `<` redirection, and
+`echo '<json>' |` breaks on any apostrophe in the søknad text — 2026-10-05).
 
 Builds soknad.docx from the tailoring JSON and converts it to soknad.pdf via
 LibreOffice headless — Norwegian applications are submitted as PDF, not
@@ -33,6 +36,8 @@ from pdf_export import convert_to_pdf
 
 OUT_ROOT = Path(__file__).parent / "profile" / "generated"
 
+SUPPORTED_LANGS = ("en", "no")
+
 
 def main() -> None:
     # Same root cause as the stdin fix below, mirrored on the way out:
@@ -45,7 +50,8 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("uuid")
-    parser.add_argument("--lang", choices=("en", "no"), default="en")
+    parser.add_argument("--lang", choices=SUPPORTED_LANGS, default="en")
+    parser.add_argument("--file", help="read the tailoring JSON from this UTF-8 file instead of stdin")
     args = parser.parse_args()
     uuid = args.uuid
     lang = args.lang
@@ -57,12 +63,36 @@ def main() -> None:
     # (ø/å/æ) into mojibake ("Høgskolen" -> "HÃ¸gskolen") in a real
     # generated søknad, caught live 2026-07-20. Reading raw bytes and
     # decoding explicitly bypasses that guess entirely.
-    raw = sys.stdin.buffer.read().decode("utf-8")
+    #
+    # "utf-8-sig" rather than "utf-8" (2026-10-05): PowerShell's `|` and
+    # `Out-File -Encoding utf8` prepend a BOM, which plain utf-8 leaves in
+    # the string and json.loads then rejects as "not valid JSON".
+    if args.file:
+        try:
+            raw_bytes = Path(args.file).read_bytes()
+        except OSError as e:
+            sys.exit(f"cannot read tailoring file {args.file}: {e}")
+    else:
+        raw_bytes = sys.stdin.buffer.read()
+    try:
+        raw = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        sys.exit(
+            f"tailoring input is not valid UTF-8 ({e}) — save the JSON as UTF-8 "
+            f"(PowerShell: Out-File -Encoding utf8) and retry"
+        )
     try:
         tailoring = json.loads(raw)
     except json.JSONDecodeError as e:
         sys.exit(f"tailoring input is not valid JSON: {e}")
+    if not isinstance(tailoring, dict):
+        sys.exit(
+            f"tailoring input must be a JSON object like {{\"soknad\": {{...}}}}, "
+            f"got {type(tailoring).__name__}"
+        )
     lang = tailoring.get("lang", lang)
+    if lang not in SUPPORTED_LANGS:
+        sys.exit(f"unsupported lang {lang!r} — expected one of {', '.join(SUPPORTED_LANGS)}")
 
     out_dir = OUT_ROOT / slug
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -74,7 +104,16 @@ def main() -> None:
     # silently re-converted the STALE docx and overwrote the user's actual
     # placed PDF with it.
     cv_pdf, cv_docx = out_dir / "cv.pdf", out_dir / "cv.docx"
-    if cv_pdf.exists():
+    if cv_pdf.exists() and cv_docx.exists() and cv_docx.stat().st_mtime > cv_pdf.stat().st_mtime:
+        # Second guard behind place_cv.py's stale-sibling cleanup (2026-10-05,
+        # stale-CV deliverable class, cf. the 2026-08-30 incident): a cv.docx
+        # NEWER than cv.pdf means the PDF predates the latest CV text. A
+        # strictly-newer docx is the edited one (the 2026-07-20 case above
+        # was the reverse: stale docx OLDER than the placed PDF, still left
+        # alone) — re-export so the deliverable isn't stale.
+        print("CV:     cv.docx is newer than cv.pdf — re-exporting so the PDF isn't stale")
+        convert_to_pdf(cv_docx)
+    elif cv_pdf.exists():
         pass  # already the final deliverable — nothing to do
     elif cv_docx.exists():
         convert_to_pdf(cv_docx)

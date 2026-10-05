@@ -23,6 +23,7 @@ stored via set_known_ids(); sync() only ever fetches the WAF-free detail
 pages.
 """
 
+import html as html_lib
 import json
 import re
 import sqlite3
@@ -67,6 +68,16 @@ def _to_iso_date(no_date: str | None) -> str | None:
         return None
 
 
+def _text(m: re.Match | None) -> str | None:
+    """Captured attribute/element text -> plain text. og:title and the
+    location/county/type fields arrive HTML-entity-encoded ("Rådgiver &amp;
+    saksbehandler"); the UI escapes again, so storing them raw showed a
+    literal "&amp;" (2026-10-05 audit; same shape as the LinkedIn fix in
+    b1430d1). description stays raw HTML on purpose — it's sanitized for
+    display, not shown as text."""
+    return html_lib.unescape(m.group(1)).strip() if m else None
+
+
 def fetch_vacancy_detail(vacancy_id: str, department_id: str) -> dict | None:
     """None on a genuinely malformed/missing page (title or description
     section absent) — callers must skip, not crash the whole sync over one
@@ -99,13 +110,13 @@ def fetch_vacancy_detail(vacancy_id: str, department_id: str) -> dict | None:
     return {
         "uuid": f"easycruit-sogndal-{vacancy_id}",
         "status": "ACTIVE",
-        "title": title_m.group(1).strip(),
+        "title": _text(title_m),
         "description": description_m.group(1).strip(),
-        "municipal": location_m.group(1).strip() if location_m else "Sogndal",
-        "county": county_m.group(1).strip() if county_m else "Vestland",
+        "municipal": _text(location_m) or "Sogndal",
+        "county": _text(county_m) or "Vestland",
         "application_due": _to_iso_date(deadline_m.group(1) if deadline_m else None),
-        "engagement_type": type_m.group(1).strip() if type_m else None,
-        "extent": workhours_m.group(1).strip() if workhours_m else None,
+        "engagement_type": _text(type_m),
+        "extent": _text(workhours_m),
         "business_name": "Sogndal kommune",
         "employer_name": "Sogndal kommune",
         "application_url": f"{BASE_URL}/vacancy/application/{vacancy_id}/{department_id}?iso=nn",

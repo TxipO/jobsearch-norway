@@ -36,8 +36,10 @@ class _FakeIMAP:
     def login(self, address, password):
         self.logged_in_as = address
 
+    select_status = "OK"
+
     def select(self, mailbox, readonly=False):
-        pass
+        return self.select_status, [b"1"]
 
     def uid(self, command, *args):
         if command == "search":
@@ -61,7 +63,7 @@ def _write_credentials(tmp_path, monkeypatch):
 def test_fetch_plain_texts_parses_real_messages(tmp_path, monkeypatch):
     _write_credentials(tmp_path, monkeypatch)
     fake = _FakeIMAP({101: _raw_email("Hello from finn.no"), 102: _raw_email("Другий лист")})
-    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host: fake)
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host, timeout=None: fake)
 
     texts = gc.fetch_plain_texts("from:finn.no")
 
@@ -73,7 +75,7 @@ def test_fetch_plain_texts_parses_real_messages(tmp_path, monkeypatch):
 
 def test_fetch_plain_texts_empty_search_returns_empty_list(tmp_path, monkeypatch):
     _write_credentials(tmp_path, monkeypatch)
-    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host: _FakeIMAP({}))
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host, timeout=None: _FakeIMAP({}))
 
     assert gc.fetch_plain_texts("from:nobody") == []
 
@@ -95,10 +97,60 @@ def test_login_failure_raises_gmail_auth_error(tmp_path, monkeypatch):
         def login(self, address, password):
             raise imaplib.IMAP4.error("[AUTHENTICATIONFAILED] Invalid credentials")
 
-    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host: _RejectingIMAP({}))
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host, timeout=None: _RejectingIMAP({}))
 
     try:
         gc.fetch_plain_texts("from:finn.no")
         assert False, "expected GmailAuthError"
     except gc.GmailAuthError as e:
         assert "IMAP login failed" in str(e)
+
+
+def test_imap_connection_gets_a_timeout(tmp_path, monkeypatch):
+    """imaplib has no default timeout — a stalled connection hung the sync
+    forever (2026-10-05)."""
+    _write_credentials(tmp_path, monkeypatch)
+    seen = {}
+
+    def factory(host, timeout=None):
+        seen["timeout"] = timeout
+        return _FakeIMAP({})
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", factory)
+    gc.fetch_plain_texts("from:x")
+    assert seen["timeout"] == gc.IMAP_TIMEOUT == 60
+
+
+def test_one_malformed_message_does_not_lose_the_batch(tmp_path, monkeypatch, caplog):
+    """A bogus charset makes get_content() raise LookupError; that used to
+    abort the whole fetch and drop every digest (2026-10-05)."""
+    _write_credentials(tmp_path, monkeypatch)
+    bad = (
+        b"From: a@example.com\r\nSubject: bad\r\nMIME-Version: 1.0\r\n"
+        b"Content-Type: text/plain; charset=bogus-charset-xyz\r\n"
+        b"Content-Transfer-Encoding: 8bit\r\n\r\nbody\r\n"
+    )
+    fake = _FakeIMAP({101: _raw_email("first ok"), 102: bad, 103: _raw_email("third ok")})
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host, timeout=None: fake)
+
+    with caplog.at_level("WARNING"):
+        texts = gc.fetch_plain_texts("from:finn.no")
+
+    assert len(texts) == 2
+    assert "first ok" in texts[0] and "third ok" in texts[1]
+    assert any("Skipping unparseable message" in r.message for r in caplog.records)
+
+
+def test_failed_select_raises_a_clear_error(tmp_path, monkeypatch):
+    _write_credentials(tmp_path, monkeypatch)
+
+    class _NoMailbox(_FakeIMAP):
+        select_status = "NO"
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", lambda host, timeout=None: _NoMailbox({}))
+
+    try:
+        gc.fetch_plain_texts("from:finn.no")
+        assert False, "expected GmailMailboxError"
+    except gc.GmailMailboxError as e:
+        assert "All Mail" in str(e)

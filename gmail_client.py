@@ -16,11 +16,25 @@ memory for the full OAuth-vs-IMAP investigation.
 import email
 import imaplib
 import json
+import logging
 from email.policy import default as email_policy
 from pathlib import Path
 
 CREDENTIALS_PATH = Path(__file__).parent / "credentials" / "gmail_app_password.json"
 IMAP_HOST = "imap.gmail.com"
+# Socket timeout (seconds) for the IMAP connection. imaplib's default is no
+# timeout at all, so a stalled connection hung the whole sync (and with it the
+# web /sync request) forever — 2026-10-05 audit.
+IMAP_TIMEOUT = 60
+
+logger = logging.getLogger(__name__)
+
+
+class GmailMailboxError(Exception):
+    """Raised when "[Gmail]/All Mail" can't be selected — most often because
+    the account's Gmail UI language renames the folder (e.g. "[Gmail]/All
+    Mail" is localized on some accounts) or IMAP access for it is hidden in
+    Gmail settings (Labels -> "Show in IMAP")."""
 
 
 class GmailAuthError(Exception):
@@ -62,12 +76,20 @@ def fetch_plain_texts(query: str) -> list[str]:
     RFC822 avoids that side effect)."""
     address, password = _load_credentials()
     texts = []
-    with imaplib.IMAP4_SSL(IMAP_HOST) as imap:
+    with imaplib.IMAP4_SSL(IMAP_HOST, timeout=IMAP_TIMEOUT) as imap:
         try:
             imap.login(address, password)
         except imaplib.IMAP4.error as e:
             raise GmailAuthError(f"IMAP login failed: {e}") from e
-        imap.select('"[Gmail]/All Mail"', readonly=True)
+        status, data = imap.select('"[Gmail]/All Mail"', readonly=True)
+        if status != "OK":
+            # Without this check a failed select fell through to SEARCH in the
+            # wrong state and surfaced as an unrelated imaplib error (or a
+            # silent empty result) — 2026-10-05 audit.
+            raise GmailMailboxError(
+                f'Could not select "[Gmail]/All Mail" (status {status}: {data}). '
+                f"Check the folder name / IMAP visibility in Gmail settings."
+            )
         status, data = imap.uid("search", "X-GM-RAW", f'"{query}"')
         if status != "OK" or not data or not data[0]:
             return texts
@@ -75,9 +97,17 @@ def fetch_plain_texts(query: str) -> list[str]:
             status, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[])")
             if status != "OK" or not msg_data or not msg_data[0]:
                 continue
-            raw = msg_data[0][1]
-            msg = email.message_from_bytes(raw, policy=email_policy)
-            body = msg.get_body(preferencelist=("plain",))
-            if body is not None:
-                texts.append(body.get_content())
+            # One malformed message (bogus charset -> LookupError from
+            # get_content, bad MIME structure, ...) used to abort the whole
+            # batch and lose every other digest with it — skip just that
+            # message (2026-10-05 audit).
+            try:
+                raw = msg_data[0][1]
+                msg = email.message_from_bytes(raw, policy=email_policy)
+                body = msg.get_body(preferencelist=("plain",))
+                if body is not None:
+                    texts.append(body.get_content())
+            except (LookupError, ValueError, UnicodeError, IndexError, TypeError) as e:
+                logger.warning(f"Skipping unparseable message UID {uid!r}: {e!r}")
+                continue
     return texts
