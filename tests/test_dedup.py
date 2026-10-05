@@ -181,3 +181,57 @@ def test_keeps_the_higher_scoring_duplicate(tmp_path):
 
     assert db.get_vacancy(conn, "nav-1")["excluded"] == 0
     assert db.get_vacancy(conn, "finn-1")["excluded"] == 1
+
+
+def _set_status(conn, uuid, status):
+    db.set_user_status(conn, uuid, status)
+
+
+def test_rescore_never_overwrites_one_non_default_status_with_another(tmp_path):
+    """2026-10-05 (/fullreview deep, critical): the old propagation forced
+    the uuid-sorted-first non-default status onto every twin. User marks the
+    visible keeper 'applied' while the hidden twin is 'interesting' -> next
+    rescore reverted the keeper to 'interesting'."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "Driftsleder", "Politiet", "Oslo")
+    _insert(conn, "jobbnorge-1", "jobbnorge", "Driftsleder", "Politiet", "Oslo")
+    _set_status(conn, "nav-1", "applied")
+    _set_status(conn, "jobbnorge-1", "interesting")
+
+    rescore_all(conn)
+    rescore_all(conn)
+
+    assert db.get_vacancy(conn, "nav-1")["user_status"] == "applied"
+    assert db.get_vacancy(conn, "jobbnorge-1")["user_status"] == "interesting"
+
+
+def test_same_source_same_key_rows_are_distinct_postings(tmp_path):
+    """2026-10-05: three same-source 'Lagermedarbeider / Coop AS / BERGEN'
+    postings (one per store) were one 'group' — trashing one archived all
+    three and delete_archived() deleted 3 rows."""
+    conn = _make_conn(tmp_path)
+    for i in (1, 2, 3):
+        _insert(conn, f"finn-{i}", "finn", "Lagermedarbeider", "Coop AS", "BERGEN")
+    _set_status(conn, "finn-1", "archived")
+
+    rescore_all(conn)
+
+    assert [db.get_vacancy(conn, f"finn-{i}")["user_status"] for i in (1, 2, 3)] == ["archived", "new", "new"]
+    assert db.delete_archived(conn) == 1
+
+
+def test_hard_block_does_not_leak_onto_same_source_postings(tmp_path):
+    """2026-10-05: _propagate_hard_blocks_across_group had the same
+    same-source flaw — a per-row block (e.g. extent-based) leaked onto a
+    different same-source posting."""
+    from scoring import _propagate_hard_blocks_across_group
+    conn = _make_conn(tmp_path)
+    _insert(conn, "finn-1", "finn", "Lagermedarbeider", "Coop AS", "BERGEN")
+    _insert(conn, "finn-2", "finn", "Lagermedarbeider", "Coop AS", "BERGEN")
+    key = _dedup_key("Coop AS", "Lagermedarbeider", "BERGEN")
+    cands = [
+        {"uuid": "finn-1", "source": "finn", "key": key, "excluded": True, "reason": "20 % stilling"},
+        {"uuid": "finn-2", "source": "finn", "key": key, "excluded": False, "reason": None},
+    ]
+    assert _propagate_hard_blocks_across_group(conn, cands) == 0
+    assert db.get_vacancy(conn, "finn-2")["excluded"] == 0

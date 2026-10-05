@@ -134,6 +134,10 @@ SENIOR_TITLE_KEYWORDS = [
     "erfaren ",
 ]
 
+# Matched clause by clause through _firm_pattern_matches (2026-10-05,
+# /fullreview deep) — a bare substring match penalised "Vi har over 25 års
+# erfaring" (employer boilerplate), "ingen krav til 3 års erfaring" and
+# "5 års erfaring er en fordel".
 YEARS_EXPERIENCE_PATTERNS = [
     r"minimum \d+ år(s)? erfaring",
     r"\d+\+? år(s)? erfaring",
@@ -181,6 +185,11 @@ DEV_TITLE_PENALTY = -40
 # assisterende Service Desk Manager" — a coordination role with no reports,
 # which was a legitimate application. What separates them is whether the ad
 # demands responsibility for staff, and that only ever shows up in the body.
+#
+# Matched clause by clause through _firm_pattern_matches (2026-10-05,
+# /fullreview deep): the bare substring match gave -30 to "Stillingen har
+# ikke personalansvar", "uten personalansvar" and "ledererfaring er en
+# fordel" — i.e. to the exact opposite of what this penalty is for.
 MANAGEMENT_REQUIRED_PATTERNS = [
     r"personalansvar",
     r"ledererfaring",
@@ -258,6 +267,52 @@ CAR_REQUIRED_KEYWORDS = [
     "egen bil", "førerkort", "eget kjøretøy", "driver's license",
     "driving licence", "must have a car",
 ]
+
+
+# A negation shortly BEFORE the match inside its own clause ("har ikke
+# personalansvar", "uten ledererfaring", "ingen krav til ...") turns a
+# requirement keyword into its opposite. A window rather than the whole
+# clause so an unrelated "ikke" earlier in a long sentence doesn't hide a
+# real requirement.
+_NEGATION_RE = re.compile(r"\b(?:ikke|uten|ingen)\b")
+_NEGATION_WINDOW = 40
+# Employer self-description, not a requirement on the applicant: "Vi har
+# over 25 års erfaring", "med mer enn 30 års erfaring i bransjen".
+_EMPLOYER_BOILERPLATE_BEFORE_RE = re.compile(r"\bvi (?:har|hadde)\b[^.;]*$|\b(?:over|mer enn)\s*$")
+
+
+def _firm_pattern_matches(text: str, patterns: list[str], years_boilerplate: bool = False) -> list[str]:
+    """Which of `patterns` match as a FIRM statement somewhere in `text`
+    (already lowercased, one bullet/paragraph per line — see
+    db.strip_html): not in a clause hard_blocks.has_optional_marker()
+    softens ("er en fordel", "ikke et krav", "krever ikke"), and not
+    directly preceded by a negation (ikke/uten/ingen). Same shared clause
+    machinery as _has_unmet_car_requirement. Keyword lists themselves are
+    unchanged — this only makes their existing matches respect negation and
+    softness. `years_boilerplate` additionally skips a match preceded by
+    "vi har ..." or a bare "over"/"mer enn" — unless the clause also states
+    a requirement verb ("Du har over 3 års erfaring"), which keeps real
+    requirements that happen to use "over"."""
+    firm: list[str] = []
+    for clause, in_required_section in iter_requirement_clauses(text):
+        if has_optional_marker(clause):
+            continue
+        for p in patterns:
+            if p in firm:
+                continue
+            for m in re.finditer(p, clause):
+                before = clause[:m.start()]
+                if _NEGATION_RE.search(before[-_NEGATION_WINDOW:]):
+                    continue
+                if (
+                    years_boilerplate
+                    and _EMPLOYER_BOILERPLATE_BEFORE_RE.search(before)
+                    and not (REQUIREMENT_VERB_RE.search(clause) or in_required_section)
+                ):
+                    continue
+                firm.append(p)
+                break
+    return firm
 
 
 def _has_unmet_car_requirement(text: str) -> bool:
@@ -555,16 +610,14 @@ def score_vacancy(
     breakdown["entry_level_bonus"] = {"points": entry_level_bonus, "matched": is_entry_level}
 
     is_senior_title = any(kw in title_l for kw in SENIOR_TITLE_KEYWORDS)
-    requires_years = any(re.search(p, text) for p in YEARS_EXPERIENCE_PATTERNS)
+    requires_years = bool(_firm_pattern_matches(text, YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True))
     senior_penalty = (-15 if is_senior_title else 0) + (-10 if requires_years else 0)
     breakdown["senior_penalty"] = {
         "points": senior_penalty,
         "matched": {"senior_title": is_senior_title, "years_required": requires_years},
     }
 
-    management_matches = [
-        p for p in MANAGEMENT_REQUIRED_PATTERNS if re.search(p, text)
-    ]
+    management_matches = _firm_pattern_matches(text, MANAGEMENT_REQUIRED_PATTERNS)
     management_penalty = -30 if management_matches else 0
     breakdown["management_penalty"] = {
         "points": management_penalty,
@@ -602,13 +655,18 @@ def score_vacancy(
     degree_penalty = -10 if requires_degree else 0
     breakdown["degree_penalty"] = {"points": degree_penalty, "matched": requires_degree}
 
+    # Clause-aware like car_penalty (2026-10-05, /fullreview deep): "Vi
+    # krever ikke flytende norsk" and "Flytende norsk er en fordel" used to
+    # take the full -20.
     requires_norwegian_fluency = bool(
-        re.search(
-            r"flytende norsk|norsk (skriftlig og muntlig|muntlig og skriftlig)"
-            r"|(written and oral|oral and written|verbal and written|spoken and written) "
-            r"(communication )?(skills )?in norwegian"
-            r"|fluent(ly)? in norwegian",
+        _firm_pattern_matches(
             text,
+            [
+                r"flytende norsk|norsk (skriftlig og muntlig|muntlig og skriftlig)"
+                r"|(written and oral|oral and written|verbal and written|spoken and written) "
+                r"(communication )?(skills )?in norwegian"
+                r"|fluent(ly)? in norwegian"
+            ],
         )
     )
     language_penalty = -20 if requires_norwegian_fluency else 0
@@ -696,7 +754,16 @@ SALARY_SUFFIX_RE = re.compile(
 )
 
 
-_SALARY_NUMBER_RE = re.compile(r"\d[\d\s.\xa0]*\d|\d")
+# Thousands-group-aware (2026-10-05, /fullreview deep): the previous
+# `\d[\d\s.\xa0]*\d` glued ANY adjacent digit runs into one number —
+# "Lønn kr 500 000 20 stillinger" became 50 000 020, "kr 520 000 31.12.2026"
+# became 52 000 031. A separator only continues a number when exactly three
+# digits follow it.
+_SALARY_NUMBER_RE = re.compile(r"\d{1,3}(?:[ .\xa0]\d{3})+|\d+")
+# What may sit between the two ends of a range ("380 000 og 520 000",
+# "522.600-635.600"); anything else between two numbers means the second one
+# is unrelated trailing text, not part of the salary.
+_SALARY_RANGE_GAP_RE = re.compile(r"\s*(?:og|til|[-–])\s*", re.I)
 
 
 def _format_salary(raw_match: str) -> str:
@@ -708,10 +775,16 @@ def _format_salary(raw_match: str) -> str:
     are read-once noise there even when they're informative in the source
     text — collapse everything to what the badge actually needs."""
     nums = []
-    for m in _SALARY_NUMBER_RE.findall(raw_match):
-        digits = re.sub(r"[\s.\xa0]", "", m)
+    prev_end = None
+    for m in _SALARY_NUMBER_RE.finditer(raw_match):
+        if prev_end is not None and (
+            len(nums) >= 2 or not _SALARY_RANGE_GAP_RE.fullmatch(raw_match[prev_end:m.start()])
+        ):
+            break
+        digits = re.sub(r"[\s.\xa0]", "", m.group(0))
         if digits:
             nums.append(f"{int(digits):,}".replace(",", " "))
+        prev_end = m.end()
     if not nums:
         return raw_match.strip(" .-")
     return "kr " + " – ".join(nums[:2])
@@ -940,6 +1013,35 @@ def rescore_all(conn) -> dict:
     return {"scored": len(rows), "excluded": excluded_count, "user_status_synced": user_status_synced}
 
 
+def _cross_source_groups(candidates: list[dict]) -> list[list[dict]]:
+    """Groups of rows sharing a _dedup_key that span >= 2 DISTINCT sources —
+    the same notion _exclude_cross_source_duplicates uses for "this is one
+    real posting seen through more than one feed". Rows of the SAME source
+    with the same key are distinct postings, not twins (found 2026-10-05,
+    /fullreview deep: three separate same-source "Lagermedarbeider / Coop AS
+    / BERGEN" ads — one per store — were treated as one posting, so trashing
+    one trashed all three and delete_archived() then deleted 3 rows)."""
+    groups: dict[tuple, list[dict]] = {}
+    for c in candidates:
+        groups.setdefault(c["key"], []).append(c)
+    return [g for g in groups.values() if len(g) >= 2 and len({c["source"] for c in g}) >= 2]
+
+
+# Which twin's status wins when several non-default ones exist and a 'new'
+# twin has to be filled in: most-advanced application stage first. A real
+# outcome/progress record beats a mere bookmark ('interesting'), and
+# 'archived' (the trash mark, see db.USER_STATUSES) is last on purpose — an
+# automatic rescore must never let a trash mark outrank real application
+# history. uuid is the final tiebreak so the choice is reproducible.
+_STATUS_FILL_PRIORITY = ("offer", "interview", "applied", "rejected", "ignored", "interesting", "archived")
+
+
+def _status_fill_key(c: dict) -> tuple:
+    status = c["user_status"]
+    rank = _STATUS_FILL_PRIORITY.index(status) if status in _STATUS_FILL_PRIORITY else len(_STATUS_FILL_PRIORITY)
+    return (rank, c["uuid"])
+
+
 def _propagate_user_status_across_group(conn, candidates: list[dict]) -> int:
     """user_status ('applied', 'interview', ...) is stored per-uuid, but the
     dedup tie-break below (highest score wins, ties broken by a fixed source
@@ -948,32 +1050,76 @@ def _propagate_user_status_across_group(conn, candidates: list[dict]) -> int:
     different uuid becomes the keeper. If the user had marked the
     now-hidden twin 'applied', the newly-visible one still reads 'new' and
     the tracked application looks lost — same failure shape as the
-    2026-07-29 data-loss incident that motivated db.backup_db(). Once any
-    copy in a dedup group carries a non-default status, every copy in the
-    group gets it, so a flip can never surface a stale 'new'."""
+    2026-07-29 data-loss incident that motivated db.backup_db(). So a twin
+    still at 'new' is FILLED from a cross-source twin that carries a
+    non-default status, and a flip can never surface a stale 'new'.
+
+    Rewritten 2026-10-05 (/fullreview deep): this used to force the
+    uuid-sorted-first non-default status onto EVERY row of the key group,
+    over other non-default statuses. Reproduced: the user marks the visible
+    keeper 'applied' while its hidden twin is 'interesting' -> the next
+    rescore reverted the keeper to 'interesting', and the user could never
+    reset a row to 'new' (the twin re-infected it). Now: (a) only groups
+    spanning >= 2 distinct sources count (_cross_source_groups), (b) only
+    rows still at 'new' are written, never one non-default status over
+    another — twins that disagree are left as the user set them, (c) a 'new'
+    row only copies from a twin of a DIFFERENT source, picked by
+    _STATUS_FILL_PRIORITY (uuid last). A deliberate change on one twin is
+    pushed to the others by set_user_status_with_twins() instead — that is
+    the user-action path, this one is only the background safety net."""
     import db
 
-    groups: dict[tuple, list[dict]] = {}
-    for c in candidates:
-        groups.setdefault(c["key"], []).append(c)
-
     synced = 0
-    for group in groups.values():
-        if len(group) < 2:
+    for group in _cross_source_groups(candidates):
+        donors = sorted((c for c in group if c["user_status"] != "new"), key=_status_fill_key)
+        if not donors:
             continue
-        non_default = sorted(
-            (c for c in group if c["user_status"] != "new"),
-            key=lambda c: c["uuid"],
-        )
-        if not non_default:
-            continue
-        target_status = non_default[0]["user_status"]
         for c in group:
-            if c["user_status"] != target_status:
-                db.set_user_status(conn, c["uuid"], target_status)
-                c["user_status"] = target_status
-                synced += 1
+            if c["user_status"] != "new":
+                continue
+            donor = next((d for d in donors if d["source"] != c["source"]), None)
+            if donor is None:
+                continue
+            db.set_user_status(conn, c["uuid"], donor["user_status"])
+            c["user_status"] = donor["user_status"]
+            synced += 1
     return synced
+
+
+def set_user_status_with_twins(conn, uuid: str, status: str) -> int:
+    """User-action path: sets `status` on `uuid` AND on every ACTIVE
+    cross-source twin (same _dedup_key, different source) — unlike the
+    rescore-time _propagate_user_status_across_group, this DOES overwrite a
+    twin's existing status, because a deliberate click is the only way a
+    reset to 'new' or an interesting -> applied change can stick (a
+    fill-only background pass would otherwise bring the old value back).
+    Same-source rows with the same key are distinct postings and are left
+    alone (see _cross_source_groups). Only ACTIVE twins, matching what
+    rescore_all groups: stamping a dead INACTIVE row with a non-'new' status
+    would make delete_inactive keep it forever.
+
+    Validates like db.set_user_status (ValueError on an unknown status,
+    before anything is written). Returns the number of rows set, including
+    `uuid` itself (0 if `uuid` doesn't exist)."""
+    import db
+
+    if status not in db.USER_STATUSES:
+        raise ValueError(f"Unknown user_status: {status!r}")
+    row = db.get_vacancy(conn, uuid)
+    if row is None:
+        return 0
+    key = _dedup_key(row["business_name"], row["title"], row["municipal"])
+    twins = [
+        r["uuid"] for r in conn.execute(
+            "SELECT uuid, business_name, title, municipal FROM vacancies "
+            "WHERE status = 'ACTIVE' AND source != ? AND uuid != ?",
+            (row["source"], uuid),
+        ).fetchall()
+        if _dedup_key(r["business_name"], r["title"], r["municipal"]) == key
+    ]
+    for u in [uuid, *twins]:
+        db.set_user_status(conn, u, status)
+    return 1 + len(twins)
 
 
 def _propagate_hard_blocks_across_group(conn, candidates: list[dict]) -> int:
@@ -987,26 +1133,32 @@ def _propagate_hard_blocks_across_group(conn, candidates: list[dict]) -> int:
     Once one copy in a cross-source dedup group is hard-blocked for a real
     reason, every other copy in that group describes the same job and must
     be blocked too, before the (separate) highest-score-wins dedup pass
-    below ever sees them."""
+    below ever sees them.
+
+    Restricted 2026-10-05 (/fullreview deep) to groups spanning >= 2
+    distinct sources, and a block is only copied from a row of a DIFFERENT
+    source (see _cross_source_groups): a per-row fact like an extent-based
+    block (this posting is 20 %) must not leak onto a different same-source
+    posting that merely shares employer+title+municipal."""
     import db
 
-    groups: dict[tuple, list[dict]] = {}
-    for c in candidates:
-        groups.setdefault(c["key"], []).append(c)
-
     propagated = 0
-    for group in groups.values():
-        if len(group) < 2:
-            continue
-        block_reason = next((c["reason"] for c in group if c["excluded"] and c["reason"]), None)
-        if not block_reason:
+    for group in _cross_source_groups(candidates):
+        # Snapshot of the rows blocked BEFORE this pass, in a fixed order —
+        # a row blocked by propagation below must not itself become a donor.
+        donors = sorted((c for c in group if c["excluded"] and c["reason"]), key=lambda c: c["uuid"])
+        if not donors:
             continue
         for c in group:
-            if not c["excluded"]:
-                db.set_exclusion(conn, c["uuid"], True, block_reason)
-                c["excluded"] = True
-                c["reason"] = block_reason
-                propagated += 1
+            if c["excluded"]:
+                continue
+            donor = next((d for d in donors if d["source"] != c["source"]), None)
+            if donor is None:
+                continue
+            db.set_exclusion(conn, c["uuid"], True, donor["reason"])
+            c["excluded"] = True
+            c["reason"] = donor["reason"]
+            propagated += 1
     return propagated
 
 

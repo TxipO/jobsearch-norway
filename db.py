@@ -3,6 +3,7 @@ import json
 import re
 import shutil
 import sqlite3
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -54,6 +55,17 @@ CREATE TABLE IF NOT EXISTS vacancies (
 CREATE TABLE IF NOT EXISTS feed_state (
     key TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- Tombstones for "Смітник" (archived) rows — see delete_archived(). Found
+-- 2026-10-05 (/fullreview deep): delete_archived() DELETEs the row, but
+-- finn/LinkedIn digests are re-read from the whole Gmail history on every
+-- sync (and NAV/Jobbnorge can re-send an ad), so the very next sync
+-- re-inserted the same uuid as user_status='new' — a trashed vacancy came
+-- back from the dead. The uuid itself is all that's needed to recognise it.
+CREATE TABLE IF NOT EXISTS dismissed_vacancies (
+    uuid TEXT PRIMARY KEY,
+    dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -158,6 +170,14 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    # SQLite's built-in LOWER()/LIKE only fold ASCII, so a search for
+    # "Ålesund" or "Østfold" never matched even with identical case (found
+    # 2026-10-05, /fullreview deep — _vacancy_filters' search lowercased the
+    # term in Python but compared it against LOWER(column), which leaves
+    # Å/Ø/Æ in the stored text untouched). Python's str.lower() folds them.
+    conn.create_function(
+        "ulower", 1, lambda s: s.lower() if isinstance(s, str) else s, deterministic=True,
+    )
     conn.executescript(SCHEMA)
     _apply_migrations(conn)
     return conn
@@ -210,10 +230,23 @@ def backup_db(db_path: Path = DB_PATH, backup_dir: Path = BACKUP_DIR, keep: int 
 _BLOCK_TAG_RE = re.compile(r"</?(?:li|p|br|div|tr|h[1-6]|ul|ol|table)\b[^>]*>", re.I)
 
 
+_INLINE_SPACE_RE = re.compile(r"[ \t\xa0]+")
+
+
 def strip_html(html: str) -> str:
     text = _BLOCK_TAG_RE.sub("\n", html or "")
     text = re.sub(r"<[^>]+>", " ", text)
-    return html_module.unescape(text)
+    text = html_module.unescape(text)
+    # NFC + inline-whitespace collapse (2026-10-05, /fullreview deep): every
+    # literal-space regex in hard_blocks/scoring ("må ha norsk
+    # autorisasjon") silently missed text carrying a non-breaking space
+    # (&nbsp; unescapes to \xa0) or a decomposed "å" (a + combining ring,
+    # NFD — common from copy-pasted/Mac-origin ad text). Newlines are kept:
+    # clause/section scoping depends on them. Only the plain-text output is
+    # affected; the UI renders descriptions from the raw HTML
+    # (web/app.py's sanitize_description), not from this.
+    text = unicodedata.normalize("NFC", text)
+    return _INLINE_SPACE_RE.sub(" ", text)
 
 
 def detect_language(description: str) -> str | None:
@@ -240,11 +273,24 @@ def set_state(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.commit()
 
 
+def is_dismissed(conn: sqlite3.Connection, uuid: str) -> bool:
+    return conn.execute("SELECT 1 FROM dismissed_vacancies WHERE uuid = ?", (uuid,)).fetchone() is not None
+
+
 def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: dict) -> bool:
     """Returns True if this inserted a vacancy we had never seen, False if it
     updated one we already held. The caller needs the distinction to report an
     honest "N new / M updated" instead of one lump count that reads as "N new"
-    even when the feed only re-sent ads we already had."""
+    even when the feed only re-sent ads we already had.
+
+    A uuid in dismissed_vacancies (the user trashed it, delete_archived()
+    removed it — 2026-10-05) is NOT re-inserted: returns False, nothing
+    written. False is the least-wrong value for nav_client's counter — it
+    can't be True ("new" would overcount a row that never appeared), and
+    there is no third value — so a skipped re-send is tallied under
+    "updated" there; cosmetic only, the DB itself is correct."""
+    if is_dismissed(conn, uuid):
+        return False
     is_new = conn.execute("SELECT 1 FROM vacancies WHERE uuid = ?", (uuid,)).fetchone() is None
     employer = ad.get("employer") or {}
     work_locations = ad.get("workLocations") or [{}]
@@ -312,7 +358,9 @@ def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: 
     return is_new
 
 
-def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None:
+def upsert_vacancy_row(
+    conn: sqlite3.Connection, row: dict, source: str, ignore_dismissed: bool = False,
+) -> bool:
     """Source-agnostic upsert for anything already shaped like our flat
     `vacancies` columns (see jobbnorge_client.to_vacancy_row). NAV keeps its
     own richer upsert_active_vacancy above because its source JSON is
@@ -335,7 +383,32 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
     link always hits ON CONFLICT) silently nulled out a row's employer and
     location — killing scoring.location_bonus with no warning. Verified
     live: a fully-populated A&O IT Group / Oslo row lost both fields this
-    way within minutes of being added correctly."""
+    way within minutes of being added correctly.
+
+    application_due/application_due_sort/extent/engagement_type get the same
+    COALESCE (2026-10-05, /fullreview deep): the 2026-09-09 fix above missed
+    them, so a manual re-add of an existing LinkedIn row (no deadline typed,
+    no extent known) still nulled the stored deadline and employment terms —
+    reproduced. A NULL/empty incoming value means "this caller doesn't know",
+    never "the source removed it". application_due_sort is derived from
+    application_due, so it follows the same rule: it is only replaced when a
+    non-empty incoming application_due accompanies it (a non-date text like
+    "Løpende" correctly resets it to NULL; an absent due keeps the old one).
+
+    A uuid in dismissed_vacancies (trashed + deleted, see delete_archived)
+    is skipped, returning False — digests are re-read from the whole Gmail
+    history, so without this a finn/LinkedIn row came back as 'new' on the
+    next sync. Callers' own counters (finn/linkedin/easycruit/jobbnorge)
+    count rows handed to this function, not its return value, so they
+    over-count a skipped row by one; cosmetic only. `ignore_dismissed=True`
+    is for an explicit user action (the manual "+ Додати вакансію" form):
+    re-adding a link the user once trashed is a deliberate resurrection, so
+    the tombstone is cleared and the row written. Returns True when a row
+    was written."""
+    if is_dismissed(conn, row["uuid"]):
+        if not ignore_dismissed:
+            return False
+        conn.execute("DELETE FROM dismissed_vacancies WHERE uuid = ?", (row["uuid"],))
     language = detect_language(row.get("description"))
     conn.execute(
         """
@@ -353,11 +426,13 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
             description = COALESCE(excluded.description, description),
             employer_name = COALESCE(excluded.employer_name, employer_name),
             application_url = excluded.application_url,
-            application_due = excluded.application_due,
-            application_due_sort = excluded.application_due_sort,
+            application_due = COALESCE(NULLIF(excluded.application_due, ''), application_due),
+            application_due_sort = CASE
+                WHEN NULLIF(excluded.application_due, '') IS NULL THEN application_due_sort
+                ELSE excluded.application_due_sort END,
             link = excluded.link,
-            engagement_type = excluded.engagement_type,
-            extent = excluded.extent,
+            engagement_type = COALESCE(NULLIF(excluded.engagement_type, ''), engagement_type),
+            extent = COALESCE(NULLIF(excluded.extent, ''), extent),
             sector = excluded.sector,
             language = excluded.language,
             last_synced_at = datetime('now')
@@ -373,6 +448,7 @@ def upsert_vacancy_row(conn: sqlite3.Connection, row: dict, source: str) -> None
         ),
     )
     conn.commit()
+    return True
 
 
 def update_description(conn: sqlite3.Connection, uuid: str, description: str) -> None:
@@ -604,6 +680,12 @@ def _score_column(profile: str) -> str:
     return SCORE_PROFILE_COLUMNS[profile]
 
 
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so user input matches literally — pair with
+    `ESCAPE '\\'` in the SQL."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _vacancy_filters(
     active_only: bool,
     user_status: str | list[str] | None,
@@ -694,11 +776,19 @@ def _vacancy_filters(
         # default. Stripping spaces on both sides means "super micro" and
         # "supermicro" become the same query against the same normalized
         # column, regardless of which one either side used.
-        norm = "REPLACE(LOWER({col}), ' ', '')"
+        #
+        # ulower (registered in connect(), 2026-10-05) replaces LOWER() here:
+        # LOWER() is ASCII-only in SQLite, so "Ålesund"/"Østfold" never
+        # matched. The user's term is also LIKE-escaped (\, %, _ are
+        # literal characters in a search box, not wildcards) with an
+        # explicit ESCAPE clause.
+        norm = "REPLACE(ulower({col}), ' ', '')"
         clauses.append(
-            "(" + " OR ".join(norm.format(col=c) + " LIKE ?" for c in ("title", "description", "business_name")) + ")"
+            "(" + " OR ".join(
+                norm.format(col=c) + " LIKE ? ESCAPE '\\'" for c in ("title", "description", "business_name")
+            ) + ")"
         )
-        like = f"%{search.lower().replace(' ', '')}%"
+        like = f"%{_escape_like(search.lower().replace(' ', ''))}%"
         params.extend([like, like, like])
     if min_score is not None:
         clauses.append(f"{_score_column(score_profile)} >= ?")
@@ -725,8 +815,15 @@ def _vacancy_filters(
         # level1 tags at once, so this is a substring match, not an exact
         # column comparison — still safely parameterized (the category
         # value never enters the SQL string itself, only the bound param).
-        clauses.append("occupation_categories LIKE ?")
-        params.append(f'%"level1": "{occupation_category}"%')
+        #
+        # The stored JSON is written with json.dumps' default
+        # ensure_ascii=True (see upsert_active_vacancy), so "Håndverkere" is
+        # stored as H\u00e5ndverkere (escaped) and a raw-text needle never matched
+        # (2026-10-05, /fullreview deep) — build the needle through the same
+        # json.dumps so it escapes identically. Storage format is unchanged:
+        # existing rows are already escaped this way.
+        clauses.append("occupation_categories LIKE ? ESCAPE '\\'")
+        params.append(f'%"level1": {_escape_like(json.dumps(occupation_category))}%')
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, params
@@ -795,10 +892,14 @@ def list_vacancies(
     # raw column directly (GLOB-checking for bare ISO) silently treated
     # every non-ISO real date as if it had none at all.
     order_clause = (
-        "ORDER BY COALESCE(application_due_sort, '9999-99-99') ASC"
+        "ORDER BY COALESCE(application_due_sort, '9999-99-99') ASC, uuid ASC"
         if sort == "deadline"
-        else f"ORDER BY {score_col} DESC NULLS LAST, published DESC"
+        else f"ORDER BY {score_col} DESC NULLS LAST, published DESC, uuid ASC"
     )
+    # Final `uuid` tiebreak on both orders (2026-10-05, /fullreview deep):
+    # without it, rows tying on score+published (or on deadline) come back in
+    # SQLite's arbitrary plan order, so LIMIT/OFFSET pagination could repeat
+    # or skip a row between page loads.
 
     return conn.execute(
         f"""
@@ -815,7 +916,9 @@ def list_vacancies(
     ).fetchall()
 
 
-def count_new_high_score(conn: sqlite3.Connection, since: str, min_score: int) -> int:
+def count_new_high_score(
+    conn: sqlite3.Connection, since: str, min_score: int, score_profile: str = "warehouse",
+) -> int:
     """Vacancies first seen after `since` (the previous sync's completion
     timestamp) scoring at least min_score — used for the post-sync "N new
     high-score matches" summary. Excludes hard-blocked rows and anything not
@@ -833,11 +936,20 @@ def count_new_high_score(conn: sqlite3.Connection, since: str, min_score: int) -
     `since` MUST be a UTC timestamp in the same "YYYY-MM-DD HH:MM:SS" shape
     as first_seen_at (written by SQLite's datetime('now'), which is UTC) —
     passing a local-time string here silently drops "new" rows for however
-    many hours local time leads UTC by."""
+    many hours local time leads UTC by.
+
+    Also requires flagged_at IS NULL (2026-10-05, /fullreview deep): the
+    default list hides user-flagged rows (🚩, see _vacancy_filters), so the
+    banner counted rows the list below it would never show. These four
+    conditions (ACTIVE, not excluded, not flagged, new/interesting) are the
+    default list's full visibility set. `score_profile` defaults to the
+    warehouse column as before; callers that display the "it" profile can
+    pass it."""
     return conn.execute(
-        "SELECT COUNT(*) FROM vacancies "
-        "WHERE first_seen_at > ? AND score >= ? AND status = 'ACTIVE' AND excluded = 0 "
-        "AND user_status IN ('new', 'interesting')",
+        f"SELECT COUNT(*) FROM vacancies "
+        f"WHERE first_seen_at > ? AND {_score_column(score_profile)} >= ? AND status = 'ACTIVE' "
+        f"AND excluded = 0 AND flagged_at IS NULL "
+        f"AND user_status IN ('new', 'interesting')",
         (since, min_score),
     ).fetchone()[0]
 
@@ -870,7 +982,17 @@ def delete_archived(conn: sqlite3.Connection) -> int:
     this row gone, not preserved as application history. Unlike
     delete_inactive/delete_expired_unreacted, this ignores the source's
     ACTIVE/INACTIVE status entirely — the user's own mark is the only
-    signal that matters here."""
+    signal that matters here.
+
+    Records every deleted uuid in dismissed_vacancies first, in the same
+    transaction (2026-10-05, /fullreview deep): finn/LinkedIn digests are
+    re-read from the whole Gmail history each sync and NAV/Jobbnorge can
+    re-send an ad, so a bare DELETE let the next sync re-insert the row as
+    'new'. upsert_active_vacancy/upsert_vacancy_row skip tombstoned uuids."""
+    conn.execute(
+        "INSERT OR IGNORE INTO dismissed_vacancies (uuid) "
+        "SELECT uuid FROM vacancies WHERE user_status = 'archived'"
+    )
     cur = conn.execute("DELETE FROM vacancies WHERE user_status = 'archived'")
     conn.commit()
     return cur.rowcount
