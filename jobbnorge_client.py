@@ -37,6 +37,16 @@ PAGE_SIZE = 100
 # real nationwide total.
 MAX_PAGES = 200
 
+# Deactivation guards (2026-10-05, see sync()): a snapshot only counts as
+# proof that a posting is gone if it is plausibly the whole list. If fewer
+# than this fraction of our currently-ACTIVE jobbnorge rows are still present
+# in it, we assume the API is broken/partial, not that >half the market
+# expired overnight, and deactivate nothing (fullreview item 12).
+MIN_SURVIVOR_RATIO = 0.5
+# Below this many existing active rows the ratio is too coarse to mean
+# anything (1 of 1 gone = 0%), so the guard is not applied.
+GUARD_MIN_ACTIVE_ROWS = 10
+
 logger = logging.getLogger(__name__)
 DETAIL_WORKERS = 8
 
@@ -206,10 +216,19 @@ def _build_municipality_county_map() -> dict[str, str]:
     return lookup
 
 
-def fetch_all_jobs() -> list[dict]:
+class JobSnapshot(list):
+    """fetch_all_jobs()'s result: a plain list of jobs plus `complete`, True
+    only when pagination ended on its own (a short/empty page) rather than at
+    the MAX_PAGES cap. sync() deactivates rows missing from the snapshot only
+    when it is complete — a capped pull is a prefix, not the whole list."""
+
+    complete: bool = False
+
+
+def fetch_all_jobs() -> JobSnapshot:
     """Nationwide, no filters — the user asked for the widest possible net;
     hard_blocks.py + scoring.py do the narrowing on our side, not the source."""
-    jobs = []
+    jobs = JobSnapshot()
     page = 1
     while True:
         resp = requests.get(
@@ -220,9 +239,11 @@ def fetch_all_jobs() -> list[dict]:
         resp.raise_for_status()
         batch = resp.json()
         if not batch:
+            jobs.complete = True
             break
         jobs.extend(batch)
         if len(batch) < PAGE_SIZE:
+            jobs.complete = True
             break
         page += 1
         if page > MAX_PAGES:
@@ -284,7 +305,8 @@ def sync(conn: sqlite3.Connection) -> dict:
     visible only to the employer's existing staff) are dropped outright:
     they're not a real opportunity for an outside applicant, no point
     storing and scoring something inapplicable."""
-    jobs = [j for j in fetch_all_jobs() if not j.get("isInternal")]
+    all_jobs = fetch_all_jobs()
+    jobs = [j for j in all_jobs if not j.get("isInternal")]
     municipality_county = _build_municipality_county_map()
 
     # Live bug caught 2026-07-17 ("Sync now" always taking 2-4+ minutes):
@@ -311,8 +333,44 @@ def sync(conn: sqlite3.Connection) -> dict:
         written += 1
         set_extent_percent(conn, row["uuid"], pct)
 
+    marked_inactive, warning = _deactivate_missing(
+        conn, {f"jobbnorge-{j['id']}" for j in jobs}, bool(getattr(all_jobs, "complete", False)),
+    )
+    # After the deactivation so the backfill (ACTIVE rows only) doesn't spend
+    # detail fetches on postings that just disappeared.
     backfilled = backfill_full_descriptions(conn)
-    return {"fetched": written, "descriptions_backfilled": backfilled}
+    stats = {"fetched": written, "marked_inactive": marked_inactive, "descriptions_backfilled": backfilled}
+    if warning:
+        stats["warning"] = warning
+    return stats
+
+
+def _deactivate_missing(conn: sqlite3.Connection, snapshot_uuids: set[str], complete: bool) -> tuple[int, str | None]:
+    """Marks ACTIVE jobbnorge rows absent from `snapshot_uuids` INACTIVE, so
+    the normal db.delete_inactive path reaps the untouched ones and keeps any
+    the user reacted to. Before 2026-10-05 nothing ever set INACTIVE on a
+    jobbnorge row ("gone = simply not in the next pull" was never acted on),
+    so every posting ever fetched stayed in the list forever.
+
+    Returns (count, warning). Deactivates nothing — and says why — unless the
+    snapshot can be trusted as the whole list: pagination finished by itself,
+    it is non-empty, and at least MIN_SURVIVOR_RATIO of our active rows are
+    still in it. A reappearing posting is simply upserted back to ACTIVE."""
+    if not complete:
+        return 0, ("Jobbnorge snapshot may be incomplete (pagination cap hit or unknown) — "
+                   "skipped deactivating missing postings.")
+    if not snapshot_uuids:
+        return 0, "Jobbnorge returned 0 postings — skipped deactivating, treating it as a failed response."
+    active = {r[0] for r in conn.execute(
+        "SELECT uuid FROM vacancies WHERE source = 'jobbnorge' AND status = 'ACTIVE'"
+    )}
+    stale = active - snapshot_uuids
+    if len(active) >= GUARD_MIN_ACTIVE_ROWS and (len(active) - len(stale)) < MIN_SURVIVOR_RATIO * len(active):
+        return 0, (f"Jobbnorge snapshot lacks {len(stale)} of {len(active)} active postings — "
+                   f"looks like a broken response, skipped deactivating.")
+    conn.executemany("UPDATE vacancies SET status = 'INACTIVE' WHERE uuid = ?", [(u,) for u in sorted(stale)])
+    conn.commit()
+    return len(stale), None
 
 
 def backfill_full_descriptions(conn: sqlite3.Connection) -> int:

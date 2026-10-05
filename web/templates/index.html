@@ -22,9 +22,11 @@
       </span>
       <span class="sync-stat" title="Jobbnorge не веде історію змін — це повний знімок усіх активних вакансій станом на зараз, а не порівняння з минулим sync">
         Jobbnorge: <strong>{{ last_sync.jobbnorge.fetched if last_sync.jobbnorge else '—' }}</strong> активних зараз
+        {%- if last_sync.jobbnorge and last_sync.jobbnorge.marked_inactive|default(0) %} · <strong>−{{ last_sync.jobbnorge.marked_inactive }}</strong> деактивовано{% endif %}
       </span>
       <span class="sync-stat" title="Видалено з нашої бази остаточно">
         Прибрано з бази: <strong>{{ last_sync.deleted_inactive|default(0) }}</strong> неактивних + <strong>{{ last_sync.deleted_expired|default(0) }}</strong> протермінованих без реакції + <strong>{{ last_sync.deleted_archived|default(0) }}</strong> зі Смітника
+        {%- if last_sync.retired_digest|default(0) %} + <strong>{{ last_sync.retired_digest }}</strong> старих finn/LinkedIn без реакції{% endif %}
       </span>
       <span class="sync-stat" title="«Відгукнувся» без реакції 2+ місяці з дедлайну заявки або з дати подачі (що пізніше) — переведено в «Ігнор»">
         Автоперехід в Ігнор: <strong>{{ last_sync.auto_ignored|default(0) }}</strong>
@@ -71,7 +73,7 @@
       NAV: {{ last_sync.stats.detail_errors }} оголошень не завантажились — імпорт призупинено на цій сторінці, повториться при наступному sync
     </div>
     {% endif %}
-    {% for source_name, source_stats in [("finn.no", last_sync.finn), ("LinkedIn", last_sync.linkedin)] %}
+    {% for source_name, source_stats in [("Jobbnorge", last_sync.jobbnorge), ("finn.no", last_sync.finn), ("LinkedIn", last_sync.linkedin)] %}
     {% if source_stats and source_stats.warning %}
     <div class="backup-warning" title="{{ source_stats.warning }}">
       <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

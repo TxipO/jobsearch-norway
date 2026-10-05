@@ -546,6 +546,9 @@ def trigger_sync() -> dict:
     deleted_inactive = db.delete_inactive(conn)
     deleted_expired = db.delete_expired_unreacted(conn)
     deleted_archived = db.delete_archived(conn)
+    # finn/LinkedIn rows are re-forced ACTIVE by every digest parse, so the
+    # deletes above never reap them; retire untouched ones by age (2026-10-05).
+    retired_digest = db.retire_stale_digest_rows(conn)
     auto_ignored = db.auto_ignore_stale_applications(conn)
     new_high_score = (
         db.count_new_high_score(
@@ -565,6 +568,7 @@ def trigger_sync() -> dict:
         "deleted_inactive": deleted_inactive,
         "deleted_expired": deleted_expired,
         "deleted_archived": deleted_archived,
+        "retired_digest": retired_digest,
         "auto_ignored": auto_ignored,
         "new_high_score": new_high_score,
         "backup_failed": backup_failed,
@@ -678,7 +682,10 @@ def add_vacancy_submit(
     # makes the upsert a silent no-op and the redirect below 404s (2026-10-05).
     # A tombstoned uuid has no row, so already_tracked is False and the
     # chosen status is applied to the revived row.
-    db.upsert_vacancy_row(conn, row, source=source, ignore_dismissed=True)
+    # manually_added: a pasted LinkedIn link is stored exactly like a digest row
+    # (source='linkedin', status 'new'), so the marker is what keeps
+    # db.retire_stale_digest_rows from reaping it after 60 days (2026-10-05).
+    db.upsert_vacancy_row(conn, row, source=source, ignore_dismissed=True, manually_added=True)
     # The form's default "new" is indistinguishable from "user didn't touch
     # it", so re-adding an already-tracked LinkedIn link used to reset an
     # 'applied' row back to 'new' (reproduced, fullreview deep 2026-10-05).
