@@ -3,11 +3,12 @@ import json
 import re
 import shutil
 import sqlite3
-import unicodedata
 from datetime import datetime
 from pathlib import Path
 
 from langdetect import LangDetectException, detect
+
+from textnorm import normalize_text
 
 DB_PATH = Path(__file__).parent / "data" / "jobsearch.db"
 
@@ -230,9 +231,6 @@ def backup_db(db_path: Path = DB_PATH, backup_dir: Path = BACKUP_DIR, keep: int 
 _BLOCK_TAG_RE = re.compile(r"</?(?:li|p|br|div|tr|h[1-6]|ul|ol|table)\b[^>]*>", re.I)
 
 
-_INLINE_SPACE_RE = re.compile(r"[ \t\xa0]+")
-
-
 def strip_html(html: str) -> str:
     text = _BLOCK_TAG_RE.sub("\n", html or "")
     text = re.sub(r"<[^>]+>", " ", text)
@@ -245,8 +243,7 @@ def strip_html(html: str) -> str:
     # clause/section scoping depends on them. Only the plain-text output is
     # affected; the UI renders descriptions from the raw HTML
     # (web/app.py's sanitize_description), not from this.
-    text = unicodedata.normalize("NFC", text)
-    return _INLINE_SPACE_RE.sub(" ", text)
+    return normalize_text(text)
 
 
 def detect_language(description: str) -> str | None:
@@ -399,8 +396,8 @@ def upsert_vacancy_row(
     is skipped, returning False — digests are re-read from the whole Gmail
     history, so without this a finn/LinkedIn row came back as 'new' on the
     next sync. Callers' own counters (finn/linkedin/easycruit/jobbnorge)
-    count rows handed to this function, not its return value, so they
-    over-count a skipped row by one; cosmetic only. `ignore_dismissed=True`
+    count only calls that return True, so a skipped row isn't tallied.
+    `ignore_dismissed=True`
     is for an explicit user action (the manual "+ Додати вакансію" form):
     re-adding a link the user once trashed is a deliberate resurrection, so
     the tombstone is cleared and the row written. Returns True when a row

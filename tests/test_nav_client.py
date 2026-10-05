@@ -320,3 +320,72 @@ def test_inactive_entry_with_missing_keys_does_not_wedge_the_cursor(tmp_path, mo
 
     assert stats["marked_inactive"] == 1
     assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def _flaky_two_pages(monkeypatch, failing, exc_factory):
+    pages = {
+        "p1": {"items": [_entry("a"), _entry("b")], "next_id": "p2"},
+        "p2": {"items": [_entry("c")], "etag": "tip"},
+    }
+    _install_flaky_feed(monkeypatch, pages, failing, exc_factory)
+
+
+def test_persistently_failing_ad_holds_cursor_three_syncs_then_advances(tmp_path, monkeypatch):
+    """Review 2026-10-05: with no retry cap one ad that always 5xx-ed held
+    the cursor on its page forever (2026-08-31 stall shape)."""
+    failing = {"b"}
+    _flaky_two_pages(monkeypatch, failing, lambda: nav_client.requests.ConnectionError("boom"))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    for n in (1, 2, 3):
+        stats = nav_client.sync(conn)
+        assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1", f"sync {n} must hold"
+        assert stats["detail_errors"] == 1 and stats["detail_missing"] == 0
+
+    stats = nav_client.sync(conn)
+    assert stats["detail_missing"] == 1 and stats["detail_errors"] == 0
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+    assert {r[0] for r in conn.execute("SELECT uuid FROM vacancies")} == {"a", "c"}
+    # Passing the page prunes the counter.
+    assert "b" not in __import__("json").loads(db.get_state(conn, nav_client.FAILURES_KEY))
+
+
+def test_invalid_json_detail_body_is_transient_but_capped(tmp_path, monkeypatch):
+    import json
+    failing = {"b"}
+    _flaky_two_pages(monkeypatch, failing, lambda: json.JSONDecodeError("bad", "", 0))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    first = nav_client.sync(conn)
+    assert first["detail_errors"] == 1
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+    for _ in range(2):
+        nav_client.sync(conn)
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+    last = nav_client.sync(conn)
+    assert last["detail_missing"] == 1
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def test_recovery_clears_the_failure_counter(tmp_path, monkeypatch):
+    import json
+    failing = {"b"}
+    _flaky_two_pages(monkeypatch, failing, lambda: nav_client.requests.ConnectionError("boom"))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    nav_client.sync(conn)
+    nav_client.sync(conn)
+    assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY)) == {"b": 2}
+
+    failing.clear()
+    nav_client.sync(conn)
+    assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY)) == {}
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+    # A later, separate outage starts counting from zero again.
+    failing.add("c")
+    nav_client.sync(conn)
+    assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY)) == {"c": 1}

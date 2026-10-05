@@ -295,7 +295,9 @@ def _firm_pattern_matches(text: str, patterns: list[str], years_boilerplate: boo
     requirements that happen to use "over"."""
     firm: list[str] = []
     for clause, in_required_section in iter_requirement_clauses(text):
-        if has_optional_marker(clause):
+        # No equivalence alternatives: "3 års erfaring ... eller tilsvarende"
+        # is still a years requirement (review 2026-10-05).
+        if has_optional_marker(clause, include_equivalence=False):
             continue
         for p in patterns:
             if p in firm:
@@ -733,7 +735,10 @@ def score_vacancy(
 # 1164/1983 descriptions (almost all noise — dates, IDs); requiring the "kr"
 # prefix narrowed that to 549/1983 genuine salary mentions, spot-checked.
 SALARY_RE = re.compile(
-    r"kr\.?\s?\d[\d\s.]{4,10}(?:\s?[-–]\s?\d[\d\s.]{4,10})?",
+    # (?!\d): the {4,10} tail is a hard length cap, so "kr 520 000 2026" used to
+    # be cut mid-number to "kr 520 000 202" (review 2026-10-05); the guard
+    # makes the regex backtrack to the last complete group instead.
+    r"kr\.?\s?\d[\d\s.]{4,10}(?:\s?[-–]\s?\d[\d\s.]{4,10})?(?!\d)",
     re.I,
 )
 
@@ -758,8 +763,13 @@ SALARY_SUFFIX_RE = re.compile(
 # `\d[\d\s.\xa0]*\d` glued ANY adjacent digit runs into one number —
 # "Lønn kr 500 000 20 stillinger" became 50 000 020, "kr 520 000 31.12.2026"
 # became 52 000 031. A separator only continues a number when exactly three
-# digits follow it.
-_SALARY_NUMBER_RE = re.compile(r"\d{1,3}(?:[ .\xa0]\d{3})+|\d+")
+# digits follow it. Also (review 2026-10-05) a group must not be followed by a
+# further digit ("520 000 2026" is 520 000 + a year, not 520 000 202), and at
+# most 7 digits make a salary: "1 000 000" (1-digit lead, two groups) or
+# "NNN NNN" (one group) — so "kr 600 000 100" is 600 000 plus unrelated text.
+_SALARY_NUMBER_RE = re.compile(
+    r"\d[ .\xa0]\d{3}[ .\xa0]\d{3}(?!\d)|\d{1,3}[ .\xa0]\d{3}(?!\d)|\d+"
+)
 # What may sit between the two ends of a range ("380 000 og 520 000",
 # "522.600-635.600"); anything else between two numbers means the second one
 # is unrelated trailing text, not part of the salary.
@@ -1013,18 +1023,32 @@ def rescore_all(conn) -> dict:
     return {"scored": len(rows), "excluded": excluded_count, "user_status_synced": user_status_synced}
 
 
+def _is_unambiguous_twin_set(sources: list[str]) -> bool:
+    """The single rule for "these ACTIVE rows (same _dedup_key) are copies of
+    ONE real posting": they span >= 2 distinct sources AND no source occurs
+    more than once. If some source appears twice, the key covers >= 2 distinct
+    postings of that source (e.g. one Coop ad per store) and a copy from
+    another source duplicates only ONE of them — we can't tell which, so NO
+    status or hard-block is propagated in such a group (found 2026-10-05,
+    review of the same-source fix: nav-a + nav-b + finn-c; trashing nav-a
+    archived finn-c, the next rescore filled nav-b from finn-c, and
+    delete_archived() deleted all three). Used identically by
+    _cross_source_groups (rescore) and set_user_status_with_twins (click)."""
+    return len(sources) >= 2 and len(set(sources)) == len(sources)
+
+
 def _cross_source_groups(candidates: list[dict]) -> list[list[dict]]:
-    """Groups of rows sharing a _dedup_key that span >= 2 DISTINCT sources —
-    the same notion _exclude_cross_source_duplicates uses for "this is one
-    real posting seen through more than one feed". Rows of the SAME source
-    with the same key are distinct postings, not twins (found 2026-10-05,
-    /fullreview deep: three separate same-source "Lagermedarbeider / Coop AS
-    / BERGEN" ads — one per store — were treated as one posting, so trashing
-    one trashed all three and delete_archived() then deleted 3 rows)."""
+    """Groups of ACTIVE rows sharing a _dedup_key that are an unambiguous twin
+    set (_is_unambiguous_twin_set): >= 2 sources, each at most once. Rows of
+    the SAME source with the same key are distinct postings, not twins (found
+    2026-10-05, /fullreview deep: three separate same-source "Lagermedarbeider
+    / Coop AS / BERGEN" ads — one per store — were treated as one posting, so
+    trashing one trashed all three and delete_archived() then deleted 3
+    rows), and a group containing such a pair is ambiguous, so skipped whole."""
     groups: dict[tuple, list[dict]] = {}
     for c in candidates:
         groups.setdefault(c["key"], []).append(c)
-    return [g for g in groups.values() if len(g) >= 2 and len({c["source"] for c in g}) >= 2]
+    return [g for g in groups.values() if _is_unambiguous_twin_set([c["source"] for c in g])]
 
 
 # Which twin's status wins when several non-default ones exist and a 'new'
@@ -1094,7 +1118,9 @@ def set_user_status_with_twins(conn, uuid: str, status: str) -> int:
     reset to 'new' or an interesting -> applied change can stick (a
     fill-only background pass would otherwise bring the old value back).
     Same-source rows with the same key are distinct postings and are left
-    alone (see _cross_source_groups). Only ACTIVE twins, matching what
+    alone, and when ANY source occurs twice among the ACTIVE rows sharing the
+    key the whole group is ambiguous and nothing but `uuid` itself is set
+    (see _is_unambiguous_twin_set). Only ACTIVE twins, matching what
     rescore_all groups: stamping a dead INACTIVE row with a non-'new' status
     would make delete_inactive keep it forever.
 
@@ -1109,14 +1135,27 @@ def set_user_status_with_twins(conn, uuid: str, status: str) -> int:
     if row is None:
         return 0
     key = _dedup_key(row["business_name"], row["title"], row["municipal"])
-    twins = [
-        r["uuid"] for r in conn.execute(
-            "SELECT uuid, business_name, title, municipal FROM vacancies "
-            "WHERE status = 'ACTIVE' AND source != ? AND uuid != ?",
-            (row["source"], uuid),
+    # Same key => same municipal component, so pre-filter on it in SQL and
+    # only run the regex-heavy full key on the few rows that remain (this
+    # used to load and key every ACTIVE row on each click, 2026-10-05).
+    # SQLite's own upper()/trim() are ASCII-only (they would never match
+    # 'ÅLESUND'), so register the exact Python expression _dedup_key uses.
+    conn.create_function("dedup_municipal", 1, lambda m: (m or "").strip().upper(), deterministic=True)
+    same_key = [
+        r for r in conn.execute(
+            "SELECT uuid, source, business_name, title, municipal FROM vacancies "
+            "WHERE status = 'ACTIVE' AND uuid != ? AND dedup_municipal(municipal) = ?",
+            (uuid, key[2]),
         ).fetchall()
         if _dedup_key(r["business_name"], r["title"], r["municipal"]) == key
     ]
+    # `uuid` itself counts as a member of the group (even if it is INACTIVE:
+    # then it is a copy too, and a same-source ACTIVE row would still make
+    # the group ambiguous).
+    if not _is_unambiguous_twin_set([row["source"], *(r["source"] for r in same_key)]):
+        twins = []
+    else:
+        twins = [r["uuid"] for r in same_key]
     for u in [uuid, *twins]:
         db.set_user_status(conn, u, status)
     return 1 + len(twins)

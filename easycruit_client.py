@@ -142,6 +142,7 @@ def sync(conn: sqlite3.Connection) -> dict:
         if row is None:
             failed += 1
             continue
-        upsert_vacancy_row(conn, row, source="easycruit")
-        fetched += 1
+        # False = tombstoned uuid, nothing written: not counted (review 2026-10-05).
+        if upsert_vacancy_row(conn, row, source="easycruit"):
+            fetched += 1
     return {"known": len(known_ids), "fetched": fetched, "failed": failed}

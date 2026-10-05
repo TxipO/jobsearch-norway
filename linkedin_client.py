@@ -129,8 +129,11 @@ def sync(conn: sqlite3.Connection) -> dict:
         if row["uuid"] in seen:
             continue
         seen.add(row["uuid"])
-        upsert_vacancy_row(conn, row, source="linkedin")
-        upserted += 1
+        # upsert_vacancy_row returns False for a tombstoned (trashed +
+        # deleted) uuid — nothing written, so it must not count (review
+        # 2026-10-05).
+        if upsert_vacancy_row(conn, row, source="linkedin"):
+            upserted += 1
 
     stats = {"messages": len(texts), "parsed": len(entries), "upserted": upserted}
     if texts and not entries:

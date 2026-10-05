@@ -235,3 +235,17 @@ def test_hard_block_does_not_leak_onto_same_source_postings(tmp_path):
     ]
     assert _propagate_hard_blocks_across_group(conn, cands) == 0
     assert db.get_vacancy(conn, "finn-2")["excluded"] == 0
+
+
+def test_hard_block_not_propagated_in_ambiguous_group():
+    """nav-a/nav-b are distinct NAV postings; finn-c duplicates only one of
+    them. A block on nav-a (e.g. extent) must not leak to nav-b or finn-c."""
+    from scoring import _propagate_hard_blocks_across_group
+    key = _dedup_key("Coop AS", "Lagermedarbeider", "BERGEN")
+    cands = [
+        {"uuid": "nav-a", "source": "nav", "key": key, "excluded": True, "reason": "20 % stilling"},
+        {"uuid": "nav-b", "source": "nav", "key": key, "excluded": False, "reason": None},
+        {"uuid": "finn-c", "source": "finn", "key": key, "excluded": False, "reason": None},
+    ]
+    assert _propagate_hard_blocks_across_group(None, cands) == 0
+    assert not cands[1]["excluded"] and not cands[2]["excluded"]
