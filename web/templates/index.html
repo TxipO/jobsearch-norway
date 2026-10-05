@@ -12,7 +12,7 @@
   <div class="sync-status">
     <div class="sync-time">Останній sync: {{ last_sync.at }}</div>
     <div class="sync-stats">
-      <span class="sync-stat" title="NAV віддає лише зміни з моменту минулого sync (інкрементальний фід). «Нових» — яких не було в базі взагалі; «оновлених» — які вже були, роботодавець змінив оголошення.">
+      <span class="sync-stat" title="NAV віддає лише зміни з моменту минулого sync (інкрементальний фід). «Нових» — яких не було в базі взагалі; «оновлених» — які вже були і роботодавець реально змінив оголошення (ідентичні повторні відправки не рахуються).">
         NAV: <strong>+{{ last_sync.stats.new|default(last_sync.stats.active_upserted)|default(0) }}</strong> нових ·
         <strong>{{ last_sync.stats.updated|default(0) }}</strong> оновлених ·
         <strong>−{{ last_sync.stats.marked_inactive|default(0) }}</strong> деактивовано
@@ -54,6 +54,31 @@
         <path d="M8 6.5v3.5M8 12h.01"/>
       </svg>
       {{ source_name }} не синхронізувався цього разу — наведи курсор для деталей
+    </div>
+    {% endif %}
+    {% endfor %}
+    {# 2026-10-05 (fullreview Stage 2 item 12): a broken source must not look like
+       an idle day. NAV detail_errors > 0 means transient detail-fetch failures
+       are HOLDING the feed cursor on that page — NAV import is paused until
+       they succeed. finn/LinkedIn "warning" = digest mails were fetched but 0
+       entries parsed (format probably changed). #}
+    {% if last_sync.stats and last_sync.stats.detail_errors|default(0) %}
+    <div class="backup-warning" title="NAV не віддав деталі цих оголошень (тимчасова помилка) — курсор фіда не рухається далі, доки вони не завантажаться">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 1.5l7 12.5H1z"/>
+        <path d="M8 6.5v3.5M8 12h.01"/>
+      </svg>
+      NAV: {{ last_sync.stats.detail_errors }} оголошень не завантажились — імпорт призупинено на цій сторінці, повториться при наступному sync
+    </div>
+    {% endif %}
+    {% for source_name, source_stats in [("finn.no", last_sync.finn), ("LinkedIn", last_sync.linkedin)] %}
+    {% if source_stats and source_stats.warning %}
+    <div class="backup-warning" title="{{ source_stats.warning }}">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 1.5l7 12.5H1z"/>
+        <path d="M8 6.5v3.5M8 12h.01"/>
+      </svg>
+      {{ source_name }}: {{ source_stats.warning }}
     </div>
     {% endif %}
     {% endfor %}
