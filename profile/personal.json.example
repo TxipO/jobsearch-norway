@@ -1,9 +1,12 @@
 {
-  "_comment": "Copy this file to personal.json (which is gitignored) and fill in real data. The CV/søknad builders read personal.json. Only facts you actually have — leave a field as an empty string or empty list if you don't want it shown; the builder omits empty sections rather than printing a placeholder. photo_path is relative to the repo root; leave empty to render the plain two-line header with no photo/table layout. hobbies_no is the Norwegian-language CV's hobbies list — falls back to hobbies (untranslated) if omitted. home_latitude/home_longitude feed reachability.py's public-transport travel-time badge — omit them and it falls back to Oslo (harmless, just makes every badge read like a long trip).",
+  "_comment": "Copy this file to personal.json (which is gitignored) and fill in real data. The CV/søknad builders read personal.json. Only facts you actually have — leave a field as an empty string or empty list if you don't want it shown; the builder omits empty sections rather than printing a placeholder. photo_path is relative to the repo root; leave empty to render the plain two-line header with no photo/table layout. hobbies_no is the Norwegian-language CV's hobbies list — falls back to hobbies (untranslated) if omitted. home_latitude/home_longitude feed reachability.py's public-transport travel-time badge — omit them and it falls back to Oslo (harmless, just makes every badge read like a long trip). home_village/household/residence_status are profile facts kept out of the public repo (2026-10-05): profile.md shows `<home_village>` as a placeholder and resume_prompt.py appends these three to the søknad prompt.",
   "name": "[First name] [Surname]",
   "phone": "+47 XXX XX XXX",
   "email": "you@example.com",
   "address_line": "[postal code] [City]",
+  "home_village": "[village/town you live in]",
+  "household": "[e.g. rented flat; who you live with and why you're tied to the place]",
+  "residence_status": "[work permit / residence status details — never printed on CV/søknad]",
   "linkedin": "",
   "photo_path": "",
   "hobbies": [],

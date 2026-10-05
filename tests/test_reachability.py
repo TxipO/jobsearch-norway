@@ -1,7 +1,7 @@
 """Tests for reachability.py's caching and failure handling. Real Entur
 network calls are isolated out via monkeypatch, same pattern as
 test_jobbnorge_client.py — verified live against the real API manually
-(Balestrand -> Bergen, 2026-07-17: ~5h25m via bus 820 + Fjordekspressen
+(home -> Bergen, 2026-07-17: ~5h25m via bus 820 + Fjordekspressen
 coach, confirms the query shape works)."""
 
 from datetime import datetime

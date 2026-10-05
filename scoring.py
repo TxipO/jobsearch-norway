@@ -97,8 +97,8 @@ GENERAL_ENTRY_TITLE_KEYWORDS = ["vikar", "deltid"]
 
 # --- Track C: dev / cybersecurity ------------------------------------------
 # Backed by education (bachelor's, unrecognized in Norway) but zero
-# professional experience — lower weight until diploma recognition / asylum
-# decision. See jobsearch-norway-profile memory, "Напрямок пошуку" section.
+# professional experience — lower weight until diploma recognition / residence-status
+# changes. See jobsearch-norway-profile memory, "Напрямок пошуку" section.
 DEV_SECURITY_KEYWORDS = [
     "python", "backend", "developer", "utvikler", "programmer", "programmerer",
     "cybersecurity", "cyber security", "informasjonssikkerhet", "sikkerhet",
