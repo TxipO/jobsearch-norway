@@ -7,6 +7,7 @@ check plain function behavior.
 """
 
 import db
+import pytest
 from starlette.requests import Request
 
 from web import app as web_app
@@ -163,3 +164,73 @@ def test_rescore_one_returns_none_for_missing_uuid(tmp_path):
 
     conn = db.connect(tmp_path / "test.db")
     assert scoring.rescore_one(conn, "does-not-exist") is None
+
+
+def test_readd_tracked_linkedin_link_with_default_status_keeps_existing_status(tmp_path, monkeypatch):
+    """fullreview deep 2026-10-05: the form's default user_status="new" used
+    to be applied unconditionally, so re-pasting a link for a row already
+    marked 'applied' silently reverted it to 'new'."""
+    conn = _setup(tmp_path, monkeypatch)
+    kwargs = dict(
+        link="https://www.linkedin.com/jobs/view/2222222222/", title="Role", business_name="X AS",
+        municipal="Oslo", county="Oslo", description="", application_due="",
+    )
+    web_app.add_vacancy_submit(user_status="new", **kwargs)
+    conn.execute("UPDATE vacancies SET user_status = 'applied' WHERE uuid = 'linkedin-2222222222'")
+    conn.commit()
+    web_app.add_vacancy_submit(user_status="new", **kwargs)
+    row = conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'linkedin-2222222222'").fetchone()
+    assert row["user_status"] == "applied"
+    # An explicit non-default pick on re-add still wins.
+    web_app.add_vacancy_submit(user_status="interesting", **kwargs)
+    row = conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'linkedin-2222222222'").fetchone()
+    assert row["user_status"] == "interesting"
+
+
+def test_fetch_linkedin_preview_rejects_non_linkedin_and_non_https_urls(monkeypatch):
+    """SSRF guard (2026-10-05): nothing may be fetched for these."""
+    calls = []
+    monkeypatch.setattr(web_app.requests, "get", lambda *a, **kw: calls.append(a) or _FakeResponse(""))
+    for url in (
+        "http://127.0.0.1:8000/", "https://evil.example/", "https://linkedin.com.evil.example/",
+        "https://evil-linkedin.com/", "http://www.linkedin.com/jobs/view/1/",
+        "https://www.linkedin.com@evil.example/", "file:///etc/passwd",
+    ):
+        with pytest.raises(ValueError):
+            web_app.fetch_linkedin_preview(url)
+    assert calls == []
+
+
+def test_fetch_linkedin_preview_revalidates_redirect_target(monkeypatch):
+    class Redirect:
+        is_redirect = True
+        headers = {"Location": "http://169.254.169.254/latest/meta-data/"}
+        text = ""
+
+        def raise_for_status(self):
+            pass
+
+    calls = []
+    monkeypatch.setattr(web_app.requests, "get", lambda url, **kw: calls.append((url, kw)) or Redirect())
+    with pytest.raises(ValueError):
+        web_app.fetch_linkedin_preview("https://www.linkedin.com/jobs/view/1/")
+    assert len(calls) == 1
+    assert calls[0][1]["allow_redirects"] is False
+
+
+def test_manual_readd_of_trashed_linkedin_link_brings_row_back(tmp_path, monkeypatch):
+    """db.delete_archived tombstones trashed uuids so syncs don't resurrect
+    them; a deliberate manual re-add must override that (2026-10-05) —
+    otherwise the upsert is skipped and the redirect target 404s."""
+    conn = _setup(tmp_path, monkeypatch)
+    kwargs = dict(
+        link="https://www.linkedin.com/jobs/view/3333333333/", title="Role", business_name="X AS",
+        municipal="Oslo", county="Oslo", description="", application_due="",
+    )
+    web_app.add_vacancy_submit(user_status="archived", **kwargs)
+    assert db.delete_archived(conn) == 1
+    assert conn.execute("SELECT 1 FROM vacancies WHERE uuid = 'linkedin-3333333333'").fetchone() is None
+    web_app.add_vacancy_submit(user_status="new", **kwargs)
+    row = conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'linkedin-3333333333'").fetchone()
+    assert row is not None
+    assert row["user_status"] == "new"
