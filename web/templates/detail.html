@@ -70,6 +70,13 @@
     Опис на finn.no недоступний (заборонено правилами сайту) — показано опис зі схожого оголошення тієї ж компанії
     (<a href="/vacancy/{{ lender.uuid }}">{{ lender.title }}</a>, {{ lender.source }}). Може відрізнятись дослівно від оригіналу на finn.no.
   </div>
+  {% elif v.description_borrowed_from %}
+  {# Lender row was closed/deleted but rescore_all keeps the borrowed text
+     (2026-10-05) — still say the text is not finn's own. #}
+  <div class="borrowed-notice">
+    Опис на finn.no недоступний (заборонено правилами сайту) — показано опис з оголошення-двійника тієї ж компанії,
+    яке вже закрите. Може відрізнятись дослівно від оригіналу на finn.no.
+  </div>
   {% endif %}
 
   <div class="description">

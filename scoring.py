@@ -952,7 +952,16 @@ def rescore_all(conn) -> dict:
         # real text there, and this must never clobber it.
         if row["source"] in ("finn", "linkedin") and (row["description_borrowed_from"] or not description):
             key = _dedup_key(row["business_name"], row["title"], row["municipal"])
-            lender_uuid, description = lender_lookup.get(key, (None, None))
+            lender = lender_lookup.get(key)
+            if lender is None and row["description_borrowed_from"] and description:
+                # Lender gone (INACTIVE/deleted, or no longer long enough) —
+                # KEEP the borrowed text, don't clear it (2026-10-05). Clearing
+                # dropped the hard-blocks the text carried, so a closed/blocked
+                # job resurfaced as a fresh unblocked finn/LinkedIn row the
+                # moment its NAV/Jobbnorge twin expired. The row is retired by
+                # age instead (db.retire_stale_digest_rows).
+                lender = (row["description_borrowed_from"], description)
+            lender_uuid, description = lender or (None, None)
             if description != row["description"] or lender_uuid != row["description_borrowed_from"]:
                 # Only re-detect language when something actually changed —
                 # code-review 2026-07-19 found this used to run

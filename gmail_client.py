@@ -27,7 +27,27 @@ IMAP_HOST = "imap.gmail.com"
 # web /sync request) forever — 2026-10-05 audit.
 IMAP_TIMEOUT = 60
 
+# How far back digest queries look (finn/LinkedIn pass it via digest_query).
+# fetch_plain_texts used to re-download every matching message in All Mail on
+# every sync — unbounded growth, and the whole history was re-parsed each time
+# (2026-10-05). Invariant, enforced by tests/test_digest_retirement.py: this
+# must be <= db.DIGEST_ROW_MAX_AGE_DAYS. A row's first_seen_at is never
+# earlier than its mail's date, so by the time retire_stale_digest_rows() can
+# retire it its mail is already outside this window and is not re-read — the
+# retired row cannot be re-created even without its tombstone (the tombstone
+# covers the day-boundary slop between Gmail's newer_than and SQLite's clock).
+# The opposite direction (lookback > max age) would make resurrection depend
+# on the tombstone alone. Tune both together; keep this the smaller one.
+GMAIL_LOOKBACK_DAYS = 60
+
 logger = logging.getLogger(__name__)
+
+
+def digest_query(base: str) -> str:
+    """`base` ("from:finn.no") limited to the last GMAIL_LOOKBACK_DAYS days.
+    fetch_plain_texts wraps the whole string in double quotes for X-GM-RAW,
+    so the operators just go space-separated inside — no extra quoting."""
+    return f"{base} newer_than:{GMAIL_LOOKBACK_DAYS}d"
 
 
 class GmailMailboxError(Exception):

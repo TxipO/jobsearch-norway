@@ -27,7 +27,7 @@ import re
 import sqlite3
 
 from db import upsert_vacancy_row
-from gmail_client import fetch_plain_texts
+from gmail_client import digest_query, fetch_plain_texts
 from jobbnorge_client import _build_municipality_county_map
 
 DASH_SPLIT_RE = re.compile(r"-{20,}")
@@ -36,7 +36,7 @@ URL_RE = re.compile(r"(https://www\.finn\.no/\d+)")
 
 def fetch_digest_texts() -> list[str]:
     """One text body per finn.no digest email currently in the mailbox."""
-    return fetch_plain_texts("from:finn.no")
+    return fetch_plain_texts(digest_query("from:finn.no"))
 
 
 def parse_digest(text: str) -> list[dict]:

@@ -28,7 +28,7 @@ import re
 import sqlite3
 
 from db import upsert_vacancy_row
-from gmail_client import fetch_plain_texts
+from gmail_client import digest_query, fetch_plain_texts
 from jobbnorge_client import _build_municipality_county_map
 
 BLOCK_SPLIT_RE = re.compile(r"-{20,}")
@@ -40,7 +40,7 @@ VIEW_JOB_RE = re.compile(r"https://(?:www|[a-z]{2})\.linkedin\.com/comm/jobs/vie
 
 def fetch_digest_texts() -> list[str]:
     """One text body per LinkedIn job-alert email currently in the mailbox."""
-    return fetch_plain_texts("from:jobalerts-noreply@linkedin.com")
+    return fetch_plain_texts(digest_query("from:jobalerts-noreply@linkedin.com"))
 
 
 def _strip_employer_suffix(title: str, employer: str) -> str:
