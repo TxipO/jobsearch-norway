@@ -167,6 +167,20 @@ request; Python module code does not without `--reload` or a restart.
 nothing because the running `uvicorn` process predated the code change —
 looked like a bug in the new code, was a stale process.
 
+**13. Non-ASCII text through SQLite's ASCII-only folding / escaped JSON**
+```
+pattern: LOWER\(|UPPER\(|LIKE|json\.dumps\(
+glob: **/*.py
+```
+SQLite's built-in `LOWER()`/`UPPER()`/`LIKE` case-fold ASCII only, and
+`json.dumps` defaults to `ensure_ascii=True`. Any comparison that
+Python-lowercases a parameter but lets SQLite fold the column, or LIKEs raw
+text against a JSON column, silently returns 0 for æ/ø/å. **Live bugs,
+found 2026-10-05:** search for "Ålesund"/"Østfold" matched nothing (fixed
+with a registered `ulower()`), and the "Håndverkere" occupation filter
+always returned 0 because storage held `Håndverkere` (needle now built
+with `json.dumps`). Also check user-typed LIKE terms escape `%`/`_`.
+
 Fix every Critical immediately without asking. Commit.
 
 ---
@@ -298,6 +312,26 @@ traces to a real incident in this project, not a hypothetical.
     feed merely re-sent, so it silently reads as growth. Split the counts
     (`new` vs `updated` vs `marked_inactive`), and where a zero could mean
     breakage, make the broken case say so instead of counting to zero.
+13. **A fuzzy dedup key treated as proof of identity when writing.** The
+    inverse of item 3: propagating a fact across a group is only right if
+    the group really is one entity. `_dedup_key` (employer+title+municipal)
+    also collides for *distinct* postings — three "Lagermedarbeider / Coop
+    AS / BERGEN" ads from one source. **Live bug, found 2026-10-05:**
+    `_propagate_user_status_across_group` forced the lowest-uuid row's
+    status onto the whole group on every rescore — trashing one of three
+    same-source Coop ads archived (then deleted) all three, an "applied"
+    keeper reverted to its twin's "interesting", and a reset to "new" never
+    stuck. Writes across a group need an identity proof (here: ≥2 sources,
+    no source twice), must never overwrite one user decision with another,
+    and the user's own click is the moment to propagate — not a later batch
+    pass guessing which status is "right".
+14. **Deleting a row that its source will send again.** A DELETE is only
+    final if nothing re-creates the row. Digest sources (finn/LinkedIn) are
+    re-read from the whole mailbox history every sync; NAV/Jobbnorge re-send
+    edited ads. **Live bug, found 2026-10-05:** rows trashed via "Смітник"
+    were deleted by `delete_archived` and came straight back as `new` on
+    the next sync. A user's "never show me this" needs a tombstone
+    (`dismissed_vacancies`), not just a DELETE.
 
 ---
 
@@ -306,6 +340,16 @@ traces to a real incident in this project, not a hypothetical.
 Project-specific surface — this app has no auth/session/multi-tenant layer
 to review (single local user, `127.0.0.1`-bound), so that entire class of
 Budget-style check is N/A here. What actually applies:
+
+- **"Local-only" is not "unreachable".** Any website the user visits can
+  POST a form to `http://127.0.0.1:8000/...`, and a DNS-rebinding page can
+  read responses. Found 2026-10-05: no Origin/Host check at all; employer-
+  supplied URLs (NAV `applicationUrl`) rendered as raw `href` (a
+  `javascript:` URL ran on the app's origin); the LinkedIn preview fetched
+  any URL (SSRF). Now guarded by `local_only_guard` middleware, the
+  `safe_url` filter and a linkedin.com allowlist — re-check that every new
+  POST route, every new `href="{{ ... }}"` built from vacancy data, and
+  every new server-side fetch of a user-supplied URL goes through them.
 
 - **Credentials.** `credentials/gmail_app_password.json` (full-mailbox IMAP
   access — broader than the OAuth `gmail.readonly` scope it replaced, a
@@ -353,7 +397,11 @@ Budget-style check is N/A here. What actually applies:
   `.claude/skills/*/SKILL.md` since the last review (`git log --stat` over
   the range) specifically for named individuals — the user's own name,
   and anyone else's (referral contacts, recruiters mentioned in a log) —
-  not just the fixed pattern list.
+  not just the fixed pattern list. Grep each name in **both Latin and
+  Cyrillic spellings** too: the Ukrainian-language logs quote draft letters
+  with the name in Cyrillic, which a Latin-only pattern misses (found that
+  way, 2026-10-05). Also grep for local-path fragments (`C--Users-`,
+  `C:\Users\`) that embed the Windows username.
 - **SQL.** Re-verify `_vacancy_filters()` stays fully parameterized as it
   grows (mechanical check #4 covers new `execute(f"...)` patterns, this is
   the "did the LIKE-clause construction stay safe" re-check for the
