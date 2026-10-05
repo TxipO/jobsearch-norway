@@ -23,7 +23,7 @@
     {% set source_url = v.application_url or v.link %}
     {% if source_url %}
     <span class="sep">&middot;</span>
-    <a class="source-link" href="{{ source_url }}" target="_blank" rel="noopener">Джерело &#8599;</a>
+    <a class="source-link" href="{{ source_url | safe_url }}" target="_blank" rel="noopener noreferrer">Джерело &#8599;</a>
     {% endif %}
   </div>
 
@@ -78,9 +78,9 @@
 
   <div class="actions">
     {% if v.application_url %}
-    <a class="apply-btn" href="{{ v.application_url }}" target="_blank" rel="noopener">Подати заявку на сайті роботодавця &rarr;</a>
+    <a class="apply-btn" href="{{ v.application_url | safe_url }}" target="_blank" rel="noopener noreferrer">Подати заявку на сайті роботодавця &rarr;</a>
     {% elif v.link %}
-    <a class="apply-btn" href="{{ v.link }}" target="_blank" rel="noopener">Відкрити на arbeidsplassen.no &rarr;</a>
+    <a class="apply-btn" href="{{ v.link | safe_url }}" target="_blank" rel="noopener noreferrer">Відкрити на arbeidsplassen.no &rarr;</a>
     {% endif %}
     <a class="apply-btn resume-btn" href="/vacancy/{{ v.uuid }}/resume-prompt">Згенерувати søknad &rarr;</a>
     {% for doc in generated_docs %}
