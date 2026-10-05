@@ -692,3 +692,27 @@ def test_norwegian_fluency_penalty_skips_negated_and_soft_mentions():
     ):
         assert _penalty(text, "norwegian_fluency_penalty") == 0, text
     assert _penalty("Du må beherske flytende norsk.", "norwegian_fluency_penalty") == -20
+
+
+def test_equivalence_alternative_does_not_cancel_years_or_management_penalty():
+    """Review 2026-10-05: 'eller tilsvarende'/'eller lignende' (degree-style
+    equivalence) were treated as softeners and wiped these penalties; master
+    kept them."""
+    from scoring import _firm_pattern_matches, MANAGEMENT_REQUIRED_PATTERNS, YEARS_EXPERIENCE_PATTERNS
+    assert _firm_pattern_matches("minimum 3 års erfaring fra lager eller tilsvarende",
+                                 YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True)
+    assert _firm_pattern_matches(
+        "du har personalansvar for 12 ansatte og ledererfaring fra butikk eller lignende",
+        MANAGEMENT_REQUIRED_PATTERNS)
+    # real softeners still cancel
+    assert not _firm_pattern_matches("minimum 3 års erfaring er en fordel",
+                                     YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True)
+
+
+def test_salary_last_group_is_not_truncated_or_extended_into_trailing_digits():
+    """Review 2026-10-05: 'kr 520 000 2026' came out as 'kr 520 000 202'
+    (length-capped mid-number) and 'kr 600 000 100' as 600 000 100."""
+    assert _parse_salary("Lønn kr 520 000 2026 oppstart") == "kr 520 000"
+    assert _parse_salary("kr 600 000 100") == "kr 600 000"
+    assert _parse_salary("Lønn kr 1 000 000 per år") == "kr 1 000 000"
+    assert _parse_salary("lønn mellom 380 000 og 520 000 kr") == "kr 380 000 – 520 000"

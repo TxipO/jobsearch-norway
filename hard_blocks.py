@@ -23,8 +23,9 @@ Design decisions (agreed with the user 2026-07-17, "вони нам не тре�
 """
 
 import re
-import unicodedata
 from bisect import bisect_right
+
+from textnorm import normalize_text
 
 # Health professions requiring authorisation under helsepersonelloven.
 # Norwegian authorisation requires a recognised education; the user's diploma
@@ -559,10 +560,21 @@ REQUIREMENT_VERB_RE = re.compile(
     # matters in a clause that already contains a specific mention pattern.
     r"\bvalid\b"
 )
+# Degree-style equivalence alternatives ("X eller tilsvarende"). They soften a
+# FORMAL-QUALIFICATION requirement (a degree OR equivalent is still a
+# requirement of something) but must not cancel a years/management/fluency
+# penalty: "minimum 3 års erfaring fra lager eller tilsvarende" still asks
+# for 3 years (review 2026-10-05). has_optional_marker(include_equivalence=
+# False) leaves them out.
+_EQUIVALENCE_RE = re.compile(
+    r"eller tilsvarende|eller tilsvarande|eller liknende|eller lignende|"
+    r"eller realkompetanse|eller relevant erfaring|eller erfaring|eller lang erfaring|"
+    r"or equivalent"
+)
 # A softener anywhere in the clause wins even under a requirements heading
 # ("Kvalifikasjoner: ... truckførerbevis er en fordel, men ikke et krav" —
 # measured live, ~55 of 118 truckfør-mentioning ads use exactly this shape).
-OPTIONAL_MARKER_RE = re.compile(
+_OPTIONAL_MARKER_CORE_RE = re.compile(
     # "fordel" used to be a bare substring, so "Vi tilbyr gode fordeler"
     # (benefits) and "fordelt på" (distributed) softened any requirement in
     # the same clause (2026-10-05, /fullreview deep). Now only the singular
@@ -572,9 +584,7 @@ OPTIONAL_MARKER_RE = re.compile(
     r"ikke\s+(?:\w+\s+)?krav|ikkje\s+(?:\w+\s+)?krav|ikke en forutsetning|"
     r"ikke noe must|bør ha|manglar du|mangler du|ikke nødvendig|kjekt om|"
     r"et ønske|kan veie opp|kan kompensere|"
-    r"eller tilsvarende|eller tilsvarande|eller liknende|eller lignende|"
-    r"eller realkompetanse|eller relevant erfaring|eller erfaring|eller lang erfaring|"
-    r"an advantage|considered an advantage|is a plus|preferred\b|or equivalent|"
+    r"an advantage|considered an advantage|is a plus|preferred\b|"
     r"nice to have|not required|desirable|training (?:can|will) be provided|we will train|"
     # Direct negation of the requirement verb itself ("trenger ikke X",
     # "krever ikke X") — added 2026-08-30 (/fullreview deep, Stage 4):
@@ -585,6 +595,7 @@ OPTIONAL_MARKER_RE = re.compile(
     # edge case.
     r"trenger ikke|trengs ikke|krever ikke|kreves ikke"
 )
+OPTIONAL_MARKER_RE = re.compile(f"(?:{_OPTIONAL_MARKER_CORE_RE.pattern})|(?:{_EQUIVALENCE_RE.pattern})")
 _PARENS_RE = re.compile(r"\([^)]*\)")
 
 # A qualifier hanging off the END of a requirement softens the detail it
@@ -600,14 +611,40 @@ _PARENS_RE = re.compile(r"\([^)]*\)")
 _TRAILING_QUALIFIER_RE = re.compile(r",\s*(?:gjerne|helst|fortrinnsvis|ideelt sett|primært)\b.*$")
 
 
-def has_optional_marker(clause: str) -> bool:
+def has_optional_marker(clause: str, include_equivalence: bool = True) -> bool:
     """Is this clause softened as a whole? Ignores softeners that only
     qualify a trailing or parenthesised detail. Shared by every soft/hard
     decision (hard_blocks' truckfør/forklift checks and scoring.py's
     car/formal-qualification/programming checks) so the scoping rule can't
-    drift between them — it used to live inline in one of the five."""
+    drift between them — it used to live inline in one of the five.
+    `include_equivalence=False` ignores "eller tilsvarende"-style
+    alternatives (see _EQUIVALENCE_RE) — used by the years/management/fluency
+    penalties, where an equivalence does not make the requirement optional."""
     scoped = _TRAILING_QUALIFIER_RE.sub("", _PARENS_RE.sub(" ", clause))
-    return bool(OPTIONAL_MARKER_RE.search(scoped))
+    return bool((OPTIONAL_MARKER_RE if include_equivalence else _OPTIONAL_MARKER_CORE_RE).search(scoped))
+
+
+# Boundaries between independent claims inside one clause. A softener only
+# softens the claim it sits in: "Du må kunne sikkerhetsklareres for hemmelig
+# og det er en fordel med erfaring fra Forsvaret" requires the clearance and
+# merely prefers the experience (review 2026-10-05).
+_SEGMENT_SPLIT_RE = re.compile(r",|;|\bog\b|\bmen\b|\bbut\b|\band\b")
+
+
+def has_optional_marker_near(clause: str, start: int, end: int, include_equivalence: bool = True) -> bool:
+    """has_optional_marker restricted to the sub-segment of `clause` (split
+    on , ; og men but and) that contains the span [start, end). Parenthesised
+    text is blanked first (same length, so offsets hold) so a comma inside
+    parentheses doesn't cut a segment in half."""
+    blanked = _PARENS_RE.sub(lambda m: " " * len(m.group()), clause)
+    seg_start, seg_end = 0, len(blanked)
+    for cut in _SEGMENT_SPLIT_RE.finditer(blanked):
+        if cut.end() <= start:
+            seg_start = cut.end()
+        elif cut.start() >= end:
+            seg_end = cut.start()
+            break
+    return has_optional_marker(blanked[seg_start:seg_end], include_equivalence)
 
 
 def _clause_bounds(text: str, start: int, end: int) -> tuple[int, int]:
@@ -625,11 +662,20 @@ def _clause_bounds(text: str, start: int, end: int) -> tuple[int, int]:
     return cs, ce
 
 
-# Negation in the text BEFORE a mention, within its own clause segment
+# Negation in the text BEFORE a mention, within its own clause segment, but
+# only the explicit "no requirement" phrasings that GOVERN the requirement
 # ("Det stilles ikke krav til X", "Ingen krav om X", "Du trenger ikke å
-# inneha X", "No EU passport"). Only the segment after the last comma / "men"
-# / "but" counts, so "Stillingen er ikke deltid, men krever X" stays firm.
-_NEGATION_BEFORE_RE = re.compile(r"\b(?:ikke|ikkje|ingen|intet|uten)\b")
+# inneha X"). A bare ikke/uten/ingen is not enough: "Søkere uten norsk
+# autorisasjon vil ikke bli vurdert" and "Det er ikke mulig å tiltre
+# stillingen uten autorisasjon" are FIRM requirements (double negatives,
+# review 2026-10-05). Only the segment after the last comma / "men" / "but"
+# counts, so "Stillingen er ikke deltid, men krever X" stays firm.
+_NEGATION_BEFORE_RE = re.compile(
+    r"\bikke\s+(?:et\s+|noe\s+)?krav|\bikkje\s+(?:et\s+|noko\s+|noe\s+)?krav|"
+    r"\bingen\s+(?:\w+\s+)?krav|\bintet\s+krav|\buten\s+krav|\bstilles\s+ikke|"
+    r"\b(?:vil|skal)\s+ikke\s+kreve|\bkrever\s+ikke|\bkreves\s+ikke|"
+    r"\btrenger\s+ikke|\btrengs\s+ikke|\bikke\s+nødvendig|\bikke\s+påkrevd"
+)
 # English negators are only trusted in the last ~3 words before the match
 # ("No EU passport", "does not require an EU passport"). Bare "no" is Nynorsk
 # for "now" ("Vi søkjer no ein IT-konsulent som må kunne sikkerhetsklareres" —
@@ -643,16 +689,22 @@ _NEGATION_SEGMENT_SPLIT_RE = re.compile(r",|\bmen\b|\bbut\b")
 def _match_is_firm(text: str, m: "re.Match[str]") -> bool:
     """Is the body-level pattern match `m` stated as a firm requirement?
     Judges the match inside its own clause: false when the clause carries a
-    softener (has_optional_marker: "en fordel", "ønskelig, men ikke et krav")
+    softener in its own sub-segment (has_optional_marker_near: "en fordel",
+    "ønskelig, men ikke et krav")
     or the match is negated. Added 2026-10-05 (/fullreview deep) — the
     body-level clearance/authorisation/EU-passport checks used to be bare
     regex hits, blind to "ikke krav om ...", "en fordel med ...", "No EU
     passport is required"."""
     cs, ce = _clause_bounds(text, m.start(), m.end())
-    if has_optional_marker(text[cs:ce]):
+    # Only a softener in the match's OWN sub-segment counts (see
+    # has_optional_marker_near).
+    if has_optional_marker_near(text[cs:ce], m.start() - cs, m.end() - cs):
         return False
     before = _NEGATION_SEGMENT_SPLIT_RE.split(text[cs:m.start()])[-1]
-    if _NEGATION_BEFORE_RE.search(before):
+    # The phrase may run INTO the match ("Ingen krav om X": the match starts
+    # at "krav"), so search before + matched text, keeping hits that begin
+    # before the match.
+    if any(n.start() < len(before) for n in _NEGATION_BEFORE_RE.finditer(before + text[m.start():m.end()])):
         return False
     near = " ".join(before.split()[-_NEGATION_EN_WINDOW_WORDS:])
     return not _NEGATION_EN_NEAR_RE.search(near)
@@ -748,20 +800,6 @@ def _has_unmet_forklift_certificate_requirement(title_l: str, body_l: str) -> bo
 # hide what we can't confidently judge).
 LOW_EXTENT_FAR_THRESHOLD = 60
 
-_HSPACE_RE = re.compile(r"[ \t\xa0]+")
-
-
-def _normalize_text(text: str | None) -> str:
-    """NFC + collapse runs of horizontal whitespace (incl. NBSP) to one
-    space, keeping newlines (the clause machinery needs them). Added
-    2026-10-05 (/fullreview deep): a decomposed "å"/"ø" (NFD, e.g. from a
-    pasted/Mac-origin title) or a double/non-breaking space ("Lager\xa0
-    medarbeider", "Vi\xa0trenger") silently defeated patterns that
-    contain a literal space or a precomposed letter. Idempotent, so the
-    body is normalised here too even though db.strip_html also does it."""
-    return _HSPACE_RE.sub(" ", unicodedata.normalize("NFC", text or ""))
-
-
 def _has_body_authorisation_requirement(body_l: str) -> bool:
     """Body-level authorisation requirement. Every hit is judged in its own
     clause (negation / softener / "enkelte-noen-visse stillinger"
@@ -795,7 +833,7 @@ def check_exclusion(
     extent_percent: int | None = None,
 ) -> tuple[bool, str | None]:
     """Returns (is_excluded, human-readable reason in Ukrainian)."""
-    title_l = _normalize_text(title).lower()
+    title_l = normalize_text(title).lower()
 
     for _key, patterns, reason in BLOCK_CATEGORIES:
         for pattern in patterns:
@@ -810,7 +848,7 @@ def check_exclusion(
     ):
         return True, f"Поза Vestland і лише {extent_percent}% ставки — переїзд економічно нереальний"
 
-    body_l = _normalize_text(description_text).lower()
+    body_l = normalize_text(description_text).lower()
     if _has_body_authorisation_requirement(body_l):
         return True, "В описі прямо вимагається норвезька авторизація"
 

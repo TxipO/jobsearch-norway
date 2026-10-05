@@ -25,6 +25,16 @@ CURSOR_KEY = "nav_feed_cursor_id"
 # days (2026-08-31 → 09-02). Do not reintroduce conditional requests here.
 ETAG_KEY = "nav_feed_cursor_etag"
 
+# Per-uuid count of consecutive syncs that were HELD on a page because this
+# ad's detail fetch failed transiently (JSON dict {uuid: count} in
+# feed_state). Without a cap, one ad that keeps 5xx-ing / timing out / answering
+# with invalid JSON holds the cursor on its page forever and halts ALL NAV
+# imports — the same silent-stall shape as the 2026-08-31 incident (review
+# 2026-10-05). After MAX_DETAIL_HOLDS held syncs the ad is given up on
+# (counted as detail_missing) so the cursor can move on.
+FAILURES_KEY = "nav_detail_failures"
+MAX_DETAIL_HOLDS = 3
+
 
 def get_token() -> str:
     token = os.environ.get("NAV_FEED_TOKEN")
@@ -61,9 +71,24 @@ def _is_permanent_detail_error(exc: requests.RequestException) -> bool:
     return status is not None and 400 <= status < 500 and status not in (408, 429)
 
 
+def _load_failures(conn: sqlite3.Connection) -> dict[str, int]:
+    try:
+        data = json.loads(get_state(conn, FAILURES_KEY) or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, int)}
+
+
+def _save_failures(conn: sqlite3.Connection, failures: dict[str, int]) -> None:
+    set_state(conn, FAILURES_KEY, json.dumps(failures, sort_keys=True))
+
+
 def sync(conn: sqlite3.Connection) -> dict:
     token = get_token()
     cursor_id = get_state(conn, CURSOR_KEY)
+    failures = _load_failures(conn)
 
     # "updated" = the stored ad content really changed; "unchanged" = the feed
     # re-sent an ad byte-identical to what we hold. The tip page is re-read
@@ -123,6 +148,7 @@ def sync(conn: sqlite3.Connection) -> dict:
         # multi-hundred-item catch-up sync take minutes. DB writes stay on this
         # thread; worker threads only ever touch the network, never `conn`.
         page_detail_errors = 0
+        failures_before = dict(failures)
         if active_uuids:
             with concurrent.futures.ThreadPoolExecutor(max_workers=DETAIL_FETCH_WORKERS) as pool:
                 future_to_uuid = {pool.submit(_fetch_ad_detail, token, u): u for u in active_uuids}
@@ -130,13 +156,23 @@ def sync(conn: sqlite3.Connection) -> dict:
                     uuid = future_to_uuid[future]
                     try:
                         ad = future.result()
-                    except requests.RequestException as e:
+                    except (requests.RequestException, ValueError) as e:
+                        # ValueError: a 200 whose body is not valid JSON —
+                        # transient like a 5xx (and capped the same way).
                         logger.warning(f"Detail fetch failed for {uuid} ({e})")
                         if _is_permanent_detail_error(e):
                             stats["detail_missing"] += 1
+                        elif failures.get(uuid, 0) >= MAX_DETAIL_HOLDS:
+                            logger.warning(
+                                f"Giving up on {uuid}: detail failed on {MAX_DETAIL_HOLDS} "
+                                f"consecutive held syncs; counting it as missing so the cursor can advance."
+                            )
+                            stats["detail_missing"] += 1
                         else:
+                            failures[uuid] = failures.get(uuid, 0) + 1
                             page_detail_errors += 1
                         continue
+                    failures.pop(uuid, None)
                     if ad is None:
                         # No content is a stable answer, not a transient
                         # failure: skip it, retrying would never change it.
@@ -157,6 +193,9 @@ def sync(conn: sqlite3.Connection) -> dict:
                         stats["unchanged"] += 1
                     else:
                         stats["updated"] += 1
+
+        if failures != failures_before:
+            _save_failures(conn, failures)
 
         if page_detail_errors:
             # A transient detail failure used to only bump detail_missing, and
@@ -185,6 +224,12 @@ def sync(conn: sqlite3.Connection) -> dict:
         # strand the whole feed for two days (2026-08-31 → 09-02, 12 pages /
         # 10 375 entries queued up while every sync reported "+0 new").
         set_state(conn, CURSOR_KEY, next_id)
+        # Pruned once the page is passed (given-up uuids included) so the
+        # counter dict can't grow without bound.
+        if any(u in failures for u in active_uuids):
+            for u in active_uuids:
+                failures.pop(u, None)
+            _save_failures(conn, failures)
         url = f"{BASE_URL}/api/v1/feed/{next_id}"
 
     return stats

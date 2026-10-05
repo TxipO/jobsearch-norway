@@ -234,3 +234,22 @@ def test_manual_readd_of_trashed_linkedin_link_brings_row_back(tmp_path, monkeyp
     row = conn.execute("SELECT user_status FROM vacancies WHERE uuid = 'linkedin-3333333333'").fetchone()
     assert row is not None
     assert row["user_status"] == "new"
+
+
+def test_add_vacancy_status_propagates_to_cross_source_twin(tmp_path, monkeypatch):
+    """Review 2026-10-05: the add form used plain db.set_user_status, so a
+    status chosen there never reached the NAV copy of the same posting."""
+    conn = _setup(tmp_path, monkeypatch)
+    db.upsert_vacancy_row(
+        conn,
+        {"uuid": "nav-1", "status": "ACTIVE", "title": "Desktop Support Engineer",
+         "business_name": "HCLTech", "municipal": "Trondheim", "description": "En lang nok beskrivelse."},
+        source="nav",
+    )
+    web_app.add_vacancy_submit(
+        link="https://www.linkedin.com/jobs/view/4459840887/",
+        title="Desktop Support Engineer", business_name="HCLTech", municipal="Trondheim",
+        county="Trøndelag", description="", application_due="", user_status="applied",
+    )
+    assert db.get_vacancy(conn, "linkedin-4459840887")["user_status"] == "applied"
+    assert db.get_vacancy(conn, "nav-1")["user_status"] == "applied"

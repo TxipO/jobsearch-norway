@@ -53,7 +53,9 @@ def test_user_action_leaves_same_source_and_unrelated_rows_alone(tmp_path):
     set_user_status_with_twins(conn, "finn-1", "archived")
 
     assert _status(conn, "finn-1") == "archived"
-    assert _status(conn, "nav-1") == "archived"      # cross-source twin
+    # finn-1/finn-2 are two postings of one source, so nav-1 can't be tied to
+    # either of them: the group is ambiguous, nothing propagates.
+    assert _status(conn, "nav-1") == "new"
     assert _status(conn, "finn-2") == "new"          # same source: distinct posting
     assert _status(conn, "nav-2") == "new"           # different key
     assert _status(conn, "li-1") == "new"            # INACTIVE twin untouched
@@ -80,3 +82,54 @@ def test_rescore_fills_new_twin_with_most_advanced_status_deterministically(tmp_
     assert _status(conn, "finn-1") == "interview"       # most advanced donor wins
     assert _status(conn, "nav-1") == "interesting"      # disagreeing twins untouched
     assert _status(conn, "jobbnorge-1") == "interview"
+
+
+def _ambiguous_group(conn):
+    """nav-a + nav-b are two distinct NAV postings (one per store); finn-c is
+    a finn.no copy of ONE of them — which one is unknowable."""
+    for uuid, source in (("nav-a", "nav"), ("nav-b", "nav"), ("finn-c", "finn")):
+        _insert(conn, uuid, source, title="Lagermedarbeider", business_name="Coop AS", municipal="BERGEN")
+
+
+def test_ambiguous_group_user_action_does_not_reach_other_source(tmp_path):
+    """2026-10-05 review: trashing nav-a archived finn-c, a later rescore
+    filled nav-b from finn-c, delete_archived() deleted all three."""
+    conn = _make_conn(tmp_path)
+    _ambiguous_group(conn)
+
+    assert set_user_status_with_twins(conn, "nav-a", "archived") == 1
+    assert [_status(conn, u) for u in ("nav-a", "nav-b", "finn-c")] == ["archived", "new", "new"]
+    # ... and from the other side too.
+    assert set_user_status_with_twins(conn, "finn-c", "applied") == 1
+    assert [_status(conn, u) for u in ("nav-a", "nav-b", "finn-c")] == ["archived", "new", "applied"]
+
+
+def test_ambiguous_group_rescore_does_not_fill_status(tmp_path):
+    conn = _make_conn(tmp_path)
+    _ambiguous_group(conn)
+    db.set_user_status(conn, "finn-c", "archived")
+
+    rescore_all(conn)
+
+    assert [_status(conn, u) for u in ("nav-a", "nav-b", "finn-c")] == ["new", "new", "archived"]
+    assert db.delete_archived(conn) == 1
+
+
+def test_unambiguous_group_ignores_unrelated_inactive_duplicate(tmp_path):
+    """Only ACTIVE rows count towards ambiguity: a dead second NAV row must
+    not disable propagation for the live nav/finn pair."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav")
+    _insert(conn, "nav-old", "nav", status="INACTIVE")
+    _insert(conn, "finn-1", "finn")
+    assert set_user_status_with_twins(conn, "nav-1", "applied") == 2
+    assert _status(conn, "finn-1") == "applied" and _status(conn, "nav-old") == "new"
+
+
+def test_twin_lookup_matches_non_ascii_municipal_case_insensitively(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", municipal="Ålesund")
+    _insert(conn, "finn-1", "finn", municipal=" ÅLESUND ")
+    _insert(conn, "finn-2", "finn", title="Annet", municipal="Ålesund")
+    assert set_user_status_with_twins(conn, "nav-1", "interesting") == 2
+    assert _status(conn, "finn-1") == "interesting" and _status(conn, "finn-2") == "new"

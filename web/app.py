@@ -683,9 +683,12 @@ def add_vacancy_submit(
     # it", so re-adding an already-tracked LinkedIn link used to reset an
     # 'applied' row back to 'new' (reproduced, fullreview deep 2026-10-05).
     # Only write a status for a brand-new row, or when the user explicitly
-    # picked something other than the default.
+    # picked something other than the default. Via the twins-aware setter
+    # (like the detail-page status action) so a status chosen here reaches a
+    # cross-source copy of the same posting instead of being lost on it
+    # (review 2026-10-05).
     if user_status in db.USER_STATUSES and (not already_tracked or user_status != "new"):
-        db.set_user_status(conn, new_uuid, user_status)
+        scoring.set_user_status_with_twins(conn, new_uuid, user_status)
     scoring.rescore_one(conn, new_uuid)
     return RedirectResponse(url=f"/vacancy/{new_uuid}", status_code=303)
 

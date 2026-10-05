@@ -298,16 +298,21 @@ def sync(conn: sqlite3.Connection) -> dict:
         "SELECT uuid, description FROM vacancies WHERE source = 'jobbnorge' AND LENGTH(description) >= 300"
     ).fetchall())
 
+    written = 0
     for job in jobs:
         row = to_vacancy_row(job, municipality_county)
         if row["uuid"] in existing_full:
             row["description"] = existing_full[row["uuid"]]
         pct = _parse_extent_percent(job.get("jobScope"), row["title"], row["description"])
-        upsert_vacancy_row(conn, row, source="jobbnorge")
+        # False = tombstoned uuid, nothing written: not counted and no row to
+        # set the extent on (review 2026-10-05).
+        if not upsert_vacancy_row(conn, row, source="jobbnorge"):
+            continue
+        written += 1
         set_extent_percent(conn, row["uuid"], pct)
 
     backfilled = backfill_full_descriptions(conn)
-    return {"fetched": len(jobs), "descriptions_backfilled": backfilled}
+    return {"fetched": written, "descriptions_backfilled": backfilled}
 
 
 def backfill_full_descriptions(conn: sqlite3.Connection) -> int:

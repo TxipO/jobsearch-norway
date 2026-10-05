@@ -868,3 +868,40 @@ def test_english_negator_far_from_match_does_not_unblock():
 def test_english_negator_near_match_still_unblocks():
     for body in ["No EU passport is required.", "We do not require an EU passport."]:
         assert not check_exclusion("Customer Support", body)[0], body
+
+
+def test_double_negative_firm_requirements_still_blocked():
+    """Review 2026-10-05: any "ikke|uten|ingen" before the match counted as
+    negation, so these FIRM requirements (the negation governs something
+    else) passed; master blocked them."""
+    for body in [
+        "Søkere uten norsk autorisasjon som sykepleier vil ikke bli vurdert.",
+        "Det er ikke mulig å tiltre stillingen uten autorisasjon etter sikkerhetsloven.",
+    ]:
+        assert check_exclusion("Kontormedarbeider", body)[0], body
+
+
+def test_explicit_no_requirement_phrases_still_unblock():
+    for body in [
+        "Det stilles ikke krav til sikkerhetsklarering.",
+        "Ikke krav om sikkerhetsklarering.",
+        "Ingen krav om sikkerhetsklarering.",
+        "Uten krav til sikkerhetsklarering.",
+        "Stillingen vil ikke kreve sikkerhetsklarering.",
+        "Sikkerhetsklarering er ikke nødvendig.",
+        "Sikkerhetsklarering er ikke påkrevd.",
+        "Du trenger ikke sikkerhetsklarering.",
+        "Ikkje krav om sikkerhetsklarering.",
+    ]:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
+def test_softener_for_another_claim_does_not_cancel_the_clearance_block():
+    """Review 2026-10-05: the softener must be in the SAME sub-segment as the
+    match — here "en fordel" qualifies Forsvaret experience, not the
+    clearance."""
+    body = "Du må kunne sikkerhetsklareres for hemmelig og det er en fordel med erfaring fra Forsvaret."
+    assert check_exclusion("Systemutvikler", body)[0]
+    # ... while a softener in the match's own segment keeps unblocking.
+    assert not check_exclusion("Systemutvikler", "Sikkerhetsklarering på nivå hemmelig er ønskelig, men ikke et krav.")[0]
+    assert not check_exclusion("Systemutvikler", "Det er en fordel å inneha sikkerhetsklarering.")[0]
