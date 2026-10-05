@@ -109,6 +109,25 @@ def test_fetch_vacancy_detail_decodes_norwegian_characters_correctly(monkeypatch
     assert row["title"] == "Barnehagelærar – bli med på leikelaget!"
 
 
+def test_fetch_vacancy_detail_unescapes_html_entities_in_text_fields(monkeypatch):
+    """2026-10-05: og:title / location / county come out of HTML attributes
+    and elements still entity-encoded; the UI escapes again, so "Rådgiver &
+    saksbehandler" showed as "&amp;". Same shape as b1430d1's LinkedIn fix."""
+    html = (
+        SAMPLE_HTML
+        .replace('content="Aktivitetsguide"', 'content="Rådgiver &amp; saksbehandler &quot;X&quot;"')
+        .replace("<p>Sogndal</p>", "<p>Sogndal &amp; Luster</p>")
+        .replace("<li>Vestland</li>", "<li>Møre &amp; Romsdal</li>")
+    )
+    monkeypatch.setattr(ec.requests, "get", lambda *a, **k: FakeResponse(html))
+
+    row = ec.fetch_vacancy_detail("1", "1")
+
+    assert row["title"] == 'Rådgiver & saksbehandler "X"'
+    assert row["municipal"] == "Sogndal & Luster"
+    assert row["county"] == "Møre & Romsdal"
+
+
 def test_fetch_vacancy_detail_returns_none_on_malformed_page(monkeypatch):
     monkeypatch.setattr(
         ec.requests, "get",
