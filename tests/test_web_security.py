@@ -223,3 +223,34 @@ def test_description_links_get_noopener_noreferrer():
     from web.render import sanitize_description
     out = sanitize_description('<a href="https://x.no">x</a>')
     assert 'rel="nofollow noopener noreferrer"' in out and 'target="_blank"' in out
+
+
+def _render_index_with_summary(tmp_db, **extra):
+    summary = {
+        "at": "05.10.2026 10:00", "watermark_utc": "2026-10-05 08:00:00",
+        "stats": {"new": 0, "updated": 0, "unchanged": 5, "marked_inactive": 0},
+        "jobbnorge": {"fetched": 1}, "finn": {}, "easycruit": {}, "linkedin": {},
+    }
+    summary.update(extra)
+    db.set_state(tmp_db, web_app.SYNC_STATE_KEY, json.dumps(summary))
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b""})
+    return web_app.index(request, user_status=[]).body.decode()
+
+
+def test_index_shows_nav_detail_errors_as_paused_import(tmp_db):
+    body = _render_index_with_summary(
+        tmp_db, stats={"new": 0, "updated": 0, "marked_inactive": 0, "detail_errors": 3},
+    )
+    assert "3 оголошень не завантажились" in body
+    assert "імпорт призупинено" in body
+    assert "імпорт призупинено" not in _render_index_with_summary(tmp_db)
+
+
+def test_index_shows_finn_and_linkedin_parse_warnings(tmp_db):
+    body = _render_index_with_summary(
+        tmp_db,
+        finn={"warning": "0 entries parsed from 4 messages"},
+        linkedin={"warning": "LinkedIn digest format changed?"},
+    )
+    assert "finn.no: 0 entries parsed from 4 messages" in body
+    assert "LinkedIn: LinkedIn digest format changed?" in body
