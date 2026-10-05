@@ -156,14 +156,35 @@ MIGRATIONS = [
     # known (that's real recorded data, not a guess); only a row with
     # neither date known is left alone entirely.
     ("vacancies", "applied_at", "TEXT"),
+    # 1 = the user typed this row in via the web form "+ Додати вакансію"
+    # (2026-10-05). A pasted LinkedIn link is stored with source='linkedin'
+    # and user_status='new' — identical to a digest row — so without this
+    # marker retire_stale_digest_rows() would delete and tombstone a vacancy
+    # the user deliberately added, 60 days later. Never reset by upserts.
+    ("vacancies", "manually_added", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
 def _apply_migrations(conn: sqlite3.Connection) -> None:
+    marker_is_new = "manually_added" not in {row[1] for row in conn.execute("PRAGMA table_info(vacancies)")}
     for table, column, definition in MIGRATIONS:
         existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    if marker_is_new:
+        # One-time backfill (2026-10-05) for LinkedIn rows added by hand before
+        # the marker existed. A digest row never carries user-typed content:
+        # description is NULL (only description-lending fills it, and that sets
+        # description_borrowed_from) and application_due is NULL. So a LinkedIn
+        # row with its own description or a deadline was typed in -> mark it.
+        # A hand-added row with ONLY a title/link is indistinguishable from a
+        # digest row and stays unmarked (known limitation: it can still be
+        # retired after DIGEST_ROW_MAX_AGE_DAYS unless the user reacts to it).
+        conn.execute(
+            "UPDATE vacancies SET manually_added = 1 WHERE source = 'linkedin' AND "
+            "((description IS NOT NULL AND description_borrowed_from IS NULL) "
+            "OR COALESCE(application_due, '') != '')"
+        )
     conn.commit()
 
 
@@ -357,6 +378,7 @@ def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: 
 
 def upsert_vacancy_row(
     conn: sqlite3.Connection, row: dict, source: str, ignore_dismissed: bool = False,
+    manually_added: bool = False,
 ) -> bool:
     """Source-agnostic upsert for anything already shaped like our flat
     `vacancies` columns (see jobbnorge_client.to_vacancy_row). NAV keeps its
@@ -401,7 +423,11 @@ def upsert_vacancy_row(
     is for an explicit user action (the manual "+ Додати вакансію" form):
     re-adding a link the user once trashed is a deliberate resurrection, so
     the tombstone is cleared and the row written. Returns True when a row
-    was written."""
+    was written.
+
+    `manually_added=True` (the web add form only) sets the manually_added
+    marker; once set, no later upsert — e.g. a digest re-read of the same
+    LinkedIn id — clears it, so retire_stale_digest_rows keeps the row."""
     if is_dismissed(conn, row["uuid"]):
         if not ignore_dismissed:
             return False
@@ -412,11 +438,12 @@ def upsert_vacancy_row(
         INSERT INTO vacancies (
             uuid, status, title, business_name, municipal, county, description,
             employer_name, application_url, application_due, application_due_sort, link,
-            engagement_type, extent, sector, source, language, last_synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            engagement_type, extent, sector, source, language, manually_added, last_synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(uuid) DO UPDATE SET
             status = excluded.status,
             title = excluded.title,
+            manually_added = MAX(manually_added, excluded.manually_added),
             business_name = COALESCE(excluded.business_name, business_name),
             municipal = COALESCE(excluded.municipal, municipal),
             county = COALESCE(excluded.county, county),
@@ -441,7 +468,7 @@ def upsert_vacancy_row(
             row.get("application_url"), row.get("application_due"),
             normalize_due_date(row.get("application_due")), row.get("link"),
             row.get("engagement_type"), row.get("extent"), row.get("sector"),
-            source, language,
+            source, language, int(manually_added),
         ),
     )
     conn.commit()
@@ -954,9 +981,9 @@ def count_new_high_score(
 def delete_inactive(conn: sqlite3.Connection) -> int:
     """NAV's terms of use require removing listings once they're inactive,
     not just hiding them — see jobsearch-norway-sources memory. Jobbnorge
-    rows never get marked INACTIVE (it's a snapshot API, gone = simply not
-    in the next pull), so this only ever touches NAV-sourced rows in
-    practice, but isn't restricted to NAV by source in case that changes.
+    rows are marked INACTIVE by jobbnorge_client.sync when a complete
+    snapshot no longer lists them (added 2026-10-05; before that they were
+    never deactivated), so this touches NAV and Jobbnorge rows.
 
     Exception: rows with user_status != 'new' are kept regardless of NAV
     status. Once the user reacts, the row stops being "a NAV listing
@@ -969,6 +996,49 @@ def delete_inactive(conn: sqlite3.Connection) -> int:
     delete_archived() call in the same sync — that status means the user
     wants the row gone regardless of source state.)"""
     cur = conn.execute("DELETE FROM vacancies WHERE status = 'INACTIVE' AND user_status = 'new'")
+    conn.commit()
+    return cur.rowcount
+
+
+# Age (days since first_seen_at) after which an untouched finn/LinkedIn digest
+# row is retired. Digest rows are forced ACTIVE with no deadline on every
+# re-parse, so neither delete_inactive nor delete_expired_unreacted can ever
+# reap them — every ad ever mailed stayed visible forever (2026-10-05).
+# Conservative default; must stay >= gmail_client.GMAIL_LOOKBACK_DAYS (see the
+# invariant comment there). Tune freely upward; lowering it hides live ads sooner.
+DIGEST_ROW_MAX_AGE_DAYS = 60
+
+
+def retire_stale_digest_rows(conn: sqlite3.Connection, max_age_days: int = DIGEST_ROW_MAX_AGE_DAYS) -> int:
+    """Removes finn/LinkedIn rows the user never touched and first saw more
+    than `max_age_days` ago. Returns the number removed.
+
+    Tombstones (dismissed_vacancies) first, then DELETEs, in one transaction —
+    the uuid is re-sent by every digest mail still inside the Gmail lookback,
+    so a bare DELETE would re-insert it as a fresh 'new' row (fullreview item
+    14), and marking it INACTIVE would not stick either (the digest upsert
+    forces status='ACTIVE'). The tombstone is what makes the retirement final.
+
+    Rows with manually_added=1 (typed in via the web form, incl. a pasted
+    LinkedIn link stored as source='linkedin') are never touched — they did
+    not come from a digest mail (2026-10-05).
+
+    Only rows with user_status='new' and no flag/note are touched: any other
+    status — and a flagged or annotated row — is the user's own history and is
+    kept, same exemption delete_inactive/delete_expired_unreacted give. Keyed
+    on first_seen_at (written once by the column default, never updated by
+    upserts), not last_synced_at, which every re-read refreshes."""
+    where = (
+        "source IN ('finn', 'linkedin') AND user_status = 'new' AND manually_added = 0 "
+        "AND flagged_at IS NULL AND COALESCE(notes, '') = '' "
+        "AND datetime(first_seen_at) < datetime('now', ?)"
+    )
+    cutoff = f"-{int(max_age_days)} days"
+    conn.execute(
+        f"INSERT OR IGNORE INTO dismissed_vacancies (uuid) SELECT uuid FROM vacancies WHERE {where}",
+        (cutoff,),
+    )
+    cur = conn.execute(f"DELETE FROM vacancies WHERE {where}", (cutoff,))
     conn.commit()
     return cur.rowcount
 

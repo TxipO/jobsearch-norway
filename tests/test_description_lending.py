@@ -102,10 +102,12 @@ def test_different_job_same_employer_does_not_borrow_wrong_description(tmp_path)
     assert finn_row["description_borrowed_from"] is None
 
 
-def test_stale_borrow_is_cleared_when_lender_disappears(tmp_path):
+def test_borrow_is_kept_when_lender_disappears(tmp_path):
     """The lending NAV row closes (goes INACTIVE, dropped from
-    iter_scorable_vacancies) — the finn row's borrowed description must
-    revert to empty on the next rescore, not keep pointing at a dead uuid."""
+    iter_scorable_vacancies) — the finn row KEEPS its borrowed description
+    (2026-10-05). Clearing it used to drop the hard-blocks the text carried,
+    so a blocked/closed job resurfaced as a fresh row once its twin expired;
+    the borrower is retired by age instead (db.retire_stale_digest_rows)."""
     conn = _make_conn(tmp_path)
     _insert(conn, "nav-1", "nav", "Selger", "Acme AS", "Bergen", description=LONG_NAV_DESCRIPTION)
     _insert(conn, "finn-1", "finn", "Selger", "Acme AS", "Bergen", description=None)
@@ -116,8 +118,45 @@ def test_stale_borrow_is_cleared_when_lender_disappears(tmp_path):
     rescore_all(conn)
 
     finn_row = db.get_vacancy(conn, "finn-1")
-    assert finn_row["description"] is None
-    assert finn_row["description_borrowed_from"] is None
+    assert finn_row["description"] == LONG_NAV_DESCRIPTION
+    assert finn_row["description_borrowed_from"] == "nav-1"
+
+
+def test_borrower_stays_excluded_after_lender_is_deleted(tmp_path):
+    """Regression (2026-10-05): the lender's text carried a hard-block; the
+    lender expired and was deleted (delete_inactive); the next rescore cleared
+    the borrowed text and the blocked finn row reappeared as fresh."""
+    conn = _make_conn(tmp_path)
+    blocked = LONG_NAV_DESCRIPTION + " Stillingen krever sikkerhetsklarering på nivå hemmelig."
+    _insert(conn, "nav-1", "nav", "Selger", "Acme AS", "Bergen", description=blocked)
+    _insert(conn, "finn-1", "finn", "Selger", "Acme AS", "Bergen", description=None)
+    rescore_all(conn)
+    assert db.get_vacancy(conn, "finn-1")["excluded"] == 1
+
+    db.mark_status(conn, "nav-1", "INACTIVE", "Selger", "Acme AS", "Bergen")
+    assert db.delete_inactive(conn) == 1
+    rescore_all(conn)
+
+    finn_row = db.get_vacancy(conn, "finn-1")
+    assert finn_row["description"] == blocked
+    assert finn_row["excluded"] == 1
+
+
+def test_borrow_switches_to_a_new_lender_when_one_matches(tmp_path):
+    """Keeping a borrowed text must not freeze it: a live lender still wins."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "Selger", "Acme AS", "Bergen", description=LONG_NAV_DESCRIPTION)
+    _insert(conn, "finn-1", "finn", "Selger", "Acme AS", "Bergen", description=None)
+    rescore_all(conn)
+    db.mark_status(conn, "nav-1", "INACTIVE", "Selger", "Acme AS", "Bergen")
+    newer = LONG_NAV_DESCRIPTION + " Oppdatert annonse."
+    _insert(conn, "jobbnorge-9", "jobbnorge", "Selger", "Acme AS", "Bergen", description=newer)
+
+    rescore_all(conn)
+
+    finn_row = db.get_vacancy(conn, "finn-1")
+    assert finn_row["description"] == newer
+    assert finn_row["description_borrowed_from"] == "jobbnorge-9"
 
 
 def test_borrowed_description_feeds_scoring(tmp_path):
@@ -135,3 +174,31 @@ def test_borrowed_description_feeds_scoring(tmp_path):
     borrowed_score = db.get_vacancy(conn, "finn-1")["score"]
     no_match_score = db.get_vacancy(conn, "finn-2")["score"]
     assert borrowed_score > no_match_score
+
+
+def test_detail_page_shows_borrowed_notice_when_lender_is_gone(tmp_path, monkeypatch):
+    """Regression (2026-10-05): the borrower keeps the lender's text after the
+    lender is deleted, but the detail page hid the notice (lender lookup came
+    back empty) so another ad's text looked like finn's own."""
+    from starlette.requests import Request
+    from web import app as web_app
+    conn = _make_conn(tmp_path)
+    real_connect = db.connect
+    monkeypatch.setattr(web_app.db, "connect", lambda *a, **kw: real_connect(tmp_path / "test.db"))
+    _insert(conn, "nav-1", "nav", "Selger", "Acme AS", "Bergen", description=LONG_NAV_DESCRIPTION)
+    _insert(conn, "finn-1", "finn", "Selger", "Acme AS", "Bergen", description=None)
+    rescore_all(conn)
+
+    def page():
+        req = Request({"type": "http", "method": "GET", "path": "/vacancy/finn-1", "headers": [], "query_string": b""})
+        return web_app.vacancy_detail(req, "finn-1").body.decode()
+
+    assert "borrowed-notice" in page() and "/vacancy/nav-1" in page()  # lender alive
+
+    db.mark_status(conn, "nav-1", "INACTIVE", "Selger", "Acme AS", "Bergen")
+    db.delete_inactive(conn)
+    rescore_all(conn)
+
+    html = page()
+    assert "borrowed-notice" in html
+    assert "яке вже закрите" in html
