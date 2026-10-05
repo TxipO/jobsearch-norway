@@ -249,3 +249,45 @@ def test_hard_block_not_propagated_in_ambiguous_group():
     ]
     assert _propagate_hard_blocks_across_group(None, cands) == 0
     assert not cands[1]["excluded"] and not cands[2]["excluded"]
+
+
+def test_duplicate_stays_hidden_after_its_twin_closes(tmp_path):
+    """2026-10-05: finn/LinkedIn rows are never marked INACTIVE (digest
+    re-parse forces ACTIVE), so when the NAV keeper closed the finn copy lost
+    its "Дублікат" exclusion and reappeared as a fresh 'new' listing for a
+    job that was already gone."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "Butikkleder Gullfunn", "Gullfunn AS", "Drammen")
+    _insert(conn, "finn-1", "finn", "Butikkleder Gullfunn", "Gullfunn AS", "Drammen")
+    rescore_all(conn)
+    hidden = [u for u in ("nav-1", "finn-1") if db.get_vacancy(conn, u)["excluded"]]
+    assert len(hidden) == 1
+    hidden_uuid = hidden[0]
+    keeper_uuid = "nav-1" if hidden_uuid == "finn-1" else "finn-1"
+
+    # Close the keeper's ad; only the hidden copy stays ACTIVE.
+    conn.execute("UPDATE vacancies SET status = 'INACTIVE' WHERE uuid = ?", (keeper_uuid,))
+    conn.commit()
+    rescore_all(conn)
+    rescore_all(conn)  # stable across repeated passes
+
+    row = db.get_vacancy(conn, hidden_uuid)
+    assert row["excluded"] == 1
+    assert "Дублікат" in row["exclusion_reason"]
+
+
+def test_never_duplicate_row_is_not_hidden_by_the_orphan_rule(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert(conn, "finn-9", "finn", "Lagermedarbeider", "Solo AS", "Bergen")
+    rescore_all(conn)
+    assert db.get_vacancy(conn, "finn-9")["excluded"] == 0
+
+
+def test_duplicate_is_unhidden_logic_untouched_while_twin_still_active(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "Butikkleder Gullfunn", "Gullfunn AS", "Drammen")
+    _insert(conn, "finn-1", "finn", "Butikkleder Gullfunn", "Gullfunn AS", "Drammen")
+    rescore_all(conn)
+    rescore_all(conn)
+    flags = sorted(db.get_vacancy(conn, u)["excluded"] for u in ("nav-1", "finn-1"))
+    assert flags == [0, 1]
