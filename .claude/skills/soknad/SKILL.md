@@ -30,7 +30,7 @@ description: >
 | Ринкові правила | `profile/cv-reference.md` §1–§7 |
 | Попередні цикли й помилки | `profile/soknad-log.md` |
 | Факти про кандидата | `profile_data.py`, `profile/personal.json` |
-| Деталі застосунків | `~/.claude/projects/C--Users-[winuser]-Budget/memory/` |
+| Деталі застосунків | `~/.claude/projects/<budget-project>/memory/` |
 
 Спершу спробувати Obsidian (дзеркало, те саме що читає користувач):
 `Claude Memory/jobsearch/Soknad-Rules.md`, `Soknad-Log.md`, `Soknad-Pipeline.md`.
