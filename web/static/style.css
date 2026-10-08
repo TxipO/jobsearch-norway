@@ -311,6 +311,11 @@ main:has(.kanban-board) {
   color: var(--c-danger-text);
   font-weight: 600;
 }
+/* health.py panel: "bad" keeps the danger red above, "warn" is the orange the
+   status pills already use, "ok" the success green — no new tokens. */
+.backup-warning.health-warn { color: var(--c-orange-text); }
+.backup-warning em { font-style: normal; font-weight: 500; opacity: 0.85; }
+.sync-stat.health-ok { color: var(--c-success-text); }
 
 /* ── Excluded banner ── */
 

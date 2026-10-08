@@ -2,6 +2,7 @@ import html
 import json
 import re
 import sys
+import time
 import uuid as uuid_module
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 import db
 import easycruit_client
 import finn_client
+import health
 import jobbnorge_client
 import linkedin_client
 import nav_client
@@ -26,6 +28,9 @@ import scoring
 from resume_prompt import build_resume_prompt
 from web.render import sanitize_description
 
+# When this process imported the app — health.stale_code() compares it with the
+# newest .py on disk to tell the user the running code is older than their edits.
+SERVER_STARTED_AT = time.time()
 SYNC_STATE_KEY = "web_last_sync_summary"
 # The "at" timestamp of the sync BEFORE the one just completed — lets index()
 # mark vacancies discovered during the most recent sync as "new" without a
@@ -443,6 +448,7 @@ def index(
     page = min(page, total_pages)
     vacancies = db.list_vacancies(conn, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE, sort=sort, **filter_kwargs)
     last_sync = db.get_state(conn, SYNC_STATE_KEY)
+    last_sync = json.loads(last_sync) if last_sync else None
     new_since = db.get_state(conn, PREV_SYNC_AT_KEY)
     return templates.TemplateResponse(
         request,
@@ -455,7 +461,9 @@ def index(
                 "min_extent_percent": min_extent_percent, "occupation_category": occupation_category,
             },
             "sources": db.list_sources(conn),
-            "last_sync": json.loads(last_sync) if last_sync else None,
+            "last_sync": last_sync,
+            "health": health.evaluate_sources(conn, last_sync),
+            "stale_code": health.stale_code(SERVER_STARTED_AT, Path(__file__).parent.parent),
             "new_since": new_since,
             "excluded_count": db.count_excluded(conn),
             "show_excluded": show_excluded_flag,

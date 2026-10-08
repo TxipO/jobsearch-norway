@@ -200,8 +200,8 @@ def test_index_renders_nav_and_jobbnorge_error_banners(tmp_db):
     db.set_state(tmp_db, web_app.SYNC_STATE_KEY, json.dumps(summary))
     request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b""})
     body = web_app.index(request, user_status=[]).body.decode()
-    assert "NAV не синхронізувався" in body
-    assert "Jobbnorge не синхронізувався" in body
+    assert "NAV:</strong> не синхронізувався" in body
+    assert "Jobbnorge:</strong> не синхронізувався" in body
 
 
 def test_sync_form_js_checks_response_ok():
@@ -252,5 +252,25 @@ def test_index_shows_finn_and_linkedin_parse_warnings(tmp_db):
         finn={"warning": "0 entries parsed from 4 messages"},
         linkedin={"warning": "LinkedIn digest format changed?"},
     )
-    assert "finn.no: 0 entries parsed from 4 messages" in body
-    assert "LinkedIn: LinkedIn digest format changed?" in body
+    assert "finn.no:</strong> 0 entries parsed from 4 messages" in body
+    assert "LinkedIn:</strong> LinkedIn digest format changed?" in body
+
+
+def test_index_says_all_sources_are_fine_only_when_they_are(tmp_db):
+    """Silence must be distinguishable from "checked, fine": the ✓ chip shows
+    only when health.py found nothing, and never next to a problem."""
+    from datetime import datetime, timezone
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    ok = _render_index_with_summary(tmp_db, watermark_utc=fresh)
+    assert "усі джерела в нормі" in ok
+    bad = _render_index_with_summary(tmp_db, watermark_utc=fresh, linkedin={"error": "IMAP login failed"})
+    assert "усі джерела в нормі" not in bad
+    assert "LinkedIn:</strong> не синхронізувався цього разу — IMAP login failed" in bad
+
+
+def test_index_warns_when_the_server_runs_older_code_than_the_files_on_disk(tmp_db, monkeypatch):
+    request = Request({"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b""})
+    monkeypatch.setattr(web_app, "SERVER_STARTED_AT", 0.0)  # started "before" every file
+    assert "Сервер працює зі старою версією коду" in web_app.index(request, user_status=[]).body.decode()
+    monkeypatch.setattr(web_app, "SERVER_STARTED_AT", 4_000_000_000.0)  # started after every edit
+    assert "Сервер працює зі старою версією коду" not in web_app.index(request, user_status=[]).body.decode()
