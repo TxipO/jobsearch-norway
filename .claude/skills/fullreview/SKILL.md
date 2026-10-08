@@ -312,6 +312,17 @@ traces to a real incident in this project, not a hypothetical.
     feed merely re-sent, so it silently reads as growth. Split the counts
     (`new` vs `updated` vs `marked_inactive`), and where a zero could mean
     breakage, make the broken case say so instead of counting to zero.
+    **Partial drift hides behind a non-zero total (2026-10-08, LinkedIn).**
+    The 2026-10-05 fix warned when a digest source parsed *0* entries. It
+    never fired when LinkedIn's parser silently lost 157 of 201 mails (276 of
+    309 distinct jobs, for weeks): the location anchor `endswith(", Norway")`
+    matched only the minority layout, a few mails kept parsing, so the total
+    never reached 0. Fix the detector, not just the parser: count the cards
+    **independently of the parser** (grep the anchor line — `View job:`,
+    `Flere detaljer:`) and warn when `parsed < cards`. Check this on every
+    parser pass — run `parse_digest` over the real mailbox **per message** and
+    list the messages that yield nothing, grouped by subject shape; the
+    aggregate "N parsed" number is exactly what hides this.
 13. **A fuzzy dedup key treated as proof of identity when writing.** The
     inverse of item 3: propagating a fact across a group is only right if
     the group really is one entity. `_dedup_key` (employer+title+municipal)

@@ -6,7 +6,9 @@ shortened, but the dash-separated block structure (title / employer /
 location / optional badge line(s) / "View job: {url}") is untouched,
 since that structure is exactly what parse_digest() depends on."""
 
-from linkedin_client import _strip_employer_suffix, parse_digest, to_vacancy_row
+import pytest
+
+from linkedin_client import _resolve_location, _strip_employer_suffix, parse_digest, to_vacancy_row
 
 # Three real cases in one fixture: a plain job with no badge line
 # (Self-Help/Customer Support), a job with a badge line between location
@@ -85,8 +87,8 @@ def test_badge_line_between_location_and_view_job_is_skipped():
 
 def test_see_all_jobs_link_is_not_parsed_as_a_job():
     """The footer "See all jobs" link points at /jobs/search-results/, not
-    /jobs/view/{id} — VIEW_JOB_RE must not match it, and even without a
-    matching URL there's no ", Norway"-ending line above it either."""
+    /jobs/view/{id} — VIEW_JOB_RE must not match it, and the block has no
+    "View job:" line at all, so there is no card to read."""
     entries = parse_digest(REAL_DIGEST_EXCERPT)
     assert len(entries) == 3
 
@@ -171,8 +173,127 @@ def test_sync_reports_messages_and_warns_when_digest_format_drifted(tmp_path, mo
     assert "warning" in stats
 
     monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [])
-    assert linkedin_client.sync(conn) == {"messages": 0, "parsed": 0, "upserted": 0}
+    assert linkedin_client.sync(conn) == {"messages": 0, "cards": 0, "parsed": 0, "upserted": 0}
 
     monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [REAL_DIGEST_EXCERPT])
     stats = linkedin_client.sync(conn)
     assert stats["messages"] == 1 and stats["parsed"] > 0 and "warning" not in stats
+
+
+# --- Digest layout seen from 2026-08 on (2026-10-08 incident) ---------------
+# LinkedIn writes most places bare ("Lindesnes", "Stavanger/Sandnes", "Greater
+# Oslo Region") and only some as "Oslo, Norway"; the alert header sits INSIDE
+# the first card's block; multi-alert digests add section headers. The parser
+# used to require a location ending in ", Norway", so 157 of 201 live digests
+# yielded nothing and 276 of 309 distinct jobs never reached the DB. Fixture is
+# the real structure with tracking params cut short.
+CURRENT_LAYOUT_DIGEST = """Your job alert for IT support in Norway
+New jobs match your preferences.
+
+Field Support Technician
+HCLTech
+Lindesnes
+This company is actively hiring
+Apply with resume & profile
+View job: https://www.linkedin.com/comm/jobs/view/4443915000/?trackingId=a%3D%3D&refId=b
+
+---------------------------------------------------------
+
+Technical Support Specialist - Norway
+Easee
+Stavanger/Sandnes
+View job: https://www.linkedin.com/comm/jobs/view/4453800001/?trackingId=c
+
+---------------------------------------------------------
+
+See all jobs on LinkedIn:  https://www.linkedin.com/comm/jobs/search-results/?keywords=x
+New jobs from your other alerts
+<strong class="font-bold" style="font-weight: 600;">IT support</strong> jobs in Norway
+Senior Support Engineer| OpenText NNMi | Oslo, Norway
+Infosys
+Greater Oslo Region
+2 connections
+View job: https://www.linkedin.com/comm/jobs/view/4421100002/?trackingId=d
+"""
+
+# The variant seen from mid-September: header and manage link on ONE line, and
+# no "match your preferences" line at all.
+MANAGE_LINE_DIGEST = """Your job alert for Technical Support Engineer in NorwayManage your job alerts:  https://www.linkedin.com/comm/jobs/alerts?x=1
+Technical Support Specialist - Norway
+Easee
+Stavanger
+View job: https://www.linkedin.com/comm/jobs/view/4463253058/?trackingId=e
+"""
+
+
+def test_current_layout_parses_every_card_including_bare_locations():
+    entries = parse_digest(CURRENT_LAYOUT_DIGEST)
+    assert [(e["title"], e["employer"], e["location"]) for e in entries] == [
+        ("Field Support Technician", "HCLTech", "Lindesnes"),
+        ("Technical Support Specialist - Norway", "Easee", "Stavanger/Sandnes"),
+        ("Senior Support Engineer| OpenText NNMi | Oslo, Norway", "Infosys", "Greater Oslo Region"),
+    ]
+    assert [e["job_id"] for e in entries] == ["4443915000", "4453800001", "4421100002"]
+
+
+def test_alert_header_inside_the_first_card_block_is_not_the_title():
+    first = parse_digest(CURRENT_LAYOUT_DIGEST)[0]
+    assert first["title"] == "Field Support Technician"
+
+
+def test_multi_alert_section_headers_never_leak_into_a_card():
+    """"See all jobs on LinkedIn: <url>", "New jobs from your other alerts" and
+    the <strong>…</strong> "jobs in Norway" line precede the first card of a
+    section. Taken as title/employer/location they produced rows titled
+    "See all jobs on LinkedIn" in the prototype."""
+    for e in parse_digest(CURRENT_LAYOUT_DIGEST):
+        for field in ("title", "employer", "location"):
+            assert "http" not in e[field] and "<" not in e[field]
+            assert not e[field].startswith(("See all", "New jobs from"))
+
+
+def test_single_line_header_with_manage_link_is_skipped():
+    entries = parse_digest(MANAGE_LINE_DIGEST)
+    assert len(entries) == 1
+    assert entries[0]["title"] == "Technical Support Specialist - Norway"
+    assert entries[0]["location"] == "Stavanger"
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("Oslo, Norway", ("Oslo", "Oslo")),
+    ("Drammen, Viken, Norway", ("Drammen", "Buskerud")),
+    ("Bergen", ("Bergen", "Vestland")),
+    ("Greater Oslo Region", ("Oslo", "Oslo")),
+    ("Trondheim Region", ("Trondheim", "Trøndelag")),
+    ("Stavanger/Sandnes", ("Stavanger", "Rogaland")),
+    ("Vestland, Norway", ("Vestland", "Vestland")),
+    ("Norway", (None, None)),
+    ("Nowhereville", ("Nowhereville", None)),
+])
+def test_resolve_location_handles_every_form_linkedin_writes(raw, expected):
+    mc = {"OSLO": "Oslo", "DRAMMEN": "Buskerud", "BERGEN": "Vestland", "TRONDHEIM": "Trøndelag",
+          "STAVANGER": "Rogaland", "SANDNES": "Rogaland", "VESTLAND": "Vestland"}
+    assert _resolve_location(raw, mc) == expected
+
+
+def test_nationwide_location_leaves_municipal_null_not_the_word_norway():
+    entry = {"job_id": "1", "title": "X", "employer": "Y", "location": "Norway"}
+    row = to_vacancy_row(entry, {"OSLO": "Oslo"})
+    assert row["municipal"] is None and row["county"] is None
+
+
+def test_sync_warns_when_cards_exist_that_the_parser_cannot_read(tmp_path, monkeypatch):
+    """The 2026-10-08 failure was invisible because a few old-format mails still
+    parsed, so "0 entries parsed" never fired. Cards are now counted straight
+    from the "View job:" lines: any card that does not become an entry is a
+    visible gap."""
+    import db
+    import linkedin_client
+
+    conn = db.connect(tmp_path / "t.db")
+    monkeypatch.setattr(linkedin_client, "_build_municipality_county_map", lambda: {})
+    unreadable = "Only Title\nView job: https://www.linkedin.com/comm/jobs/view/4400000009/?x=1\n"
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [CURRENT_LAYOUT_DIGEST, unreadable])
+    stats = linkedin_client.sync(conn)
+    assert stats["cards"] == 4 and stats["parsed"] == 3 and stats["upserted"] == 3
+    assert "1 of 4" in stats["warning"]

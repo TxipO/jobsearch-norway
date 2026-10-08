@@ -27,7 +27,7 @@ import html as html_lib
 import json
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -35,6 +35,13 @@ from db import get_state, set_state, upsert_vacancy_row
 
 BASE_URL = "https://sogndal.easycruit.com"
 KNOWN_IDS_KEY = "easycruit_sogndal_known_ids"
+IDS_REFRESHED_AT_KEY = "easycruit_sogndal_ids_refreshed_at"
+# The id list is hand-maintained (the list page is behind a WAF challenge), so
+# nothing tells us when Sogndal posts something new. Found 2026-10-08: the list
+# had not been refreshed since 2026-08-07, 4 new vacancies (nurses, a health
+# station manager, a kindergarten assistant) were invisible for two months, and
+# 8 of the 13 stored ids had closed — all of it reported only as "failed: 8".
+IDS_STALE_AFTER_DAYS = 14
 
 _TITLE_RE = re.compile(r'<meta property="og:title" content="([^"]*)"')
 _DESCRIPTION_RE = re.compile(r'<div class="jd-description">(.*?)</div>\s*<div class="bottom-buttons">', re.DOTALL)
@@ -50,6 +57,7 @@ def set_known_ids(conn: sqlite3.Connection, ids: list[tuple[str, str]]) -> None:
     the list page — see this module's docstring for why this can't be
     automated the same way NAV/Jobbnorge are."""
     set_state(conn, KNOWN_IDS_KEY, json.dumps(ids))
+    set_state(conn, IDS_REFRESHED_AT_KEY, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
 
 
 def get_known_ids(conn: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -145,4 +153,21 @@ def sync(conn: sqlite3.Connection) -> dict:
         # False = tombstoned uuid, nothing written: not counted (review 2026-10-05).
         if upsert_vacancy_row(conn, row, source="easycruit"):
             fetched += 1
-    return {"known": len(known_ids), "fetched": fetched, "failed": failed}
+    stats = {"known": len(known_ids), "fetched": fetched, "failed": failed}
+    warnings = []
+    if failed:
+        warnings.append(
+            f"{failed} of {len(known_ids)} stored vacancies could not be fetched "
+            f"(closed since the list was made, or the page changed)"
+        )
+    refreshed = get_state(conn, IDS_REFRESHED_AT_KEY)
+    if refreshed is None or datetime.strptime(refreshed, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(days=IDS_STALE_AFTER_DAYS):
+        warnings.append(
+            f"the hand-maintained vacancy list was last refreshed {refreshed or 'never (unknown)'} — "
+            f"new Sogndal vacancies are invisible until it is refreshed from the list page "
+            f"(see this module's docstring)"
+        )
+    if warnings:
+        stats["warning"] = "; ".join(warnings)
+    return stats

@@ -138,13 +138,14 @@ def test_digest_clients_bound_their_gmail_query(monkeypatch):
     linkedin_client.fetch_digest_texts()
     n = gmail_client.GMAIL_LOOKBACK_DAYS
     assert seen == [f"from:finn.no newer_than:{n}d",
-                    f"from:jobalerts-noreply@linkedin.com newer_than:{n}d"]
+                    f"from:jobalerts-noreply@linkedin.com newer_than:{linkedin_client.LINKEDIN_LOOKBACK_DAYS}d"]
 
 
 def test_gmail_lookback_never_exceeds_row_retirement_age():
     """A retired row's mail must already be outside the lookback window, so
     nothing re-reads (and could resurrect) it even before the tombstone."""
     assert gmail_client.GMAIL_LOOKBACK_DAYS <= db.DIGEST_ROW_MAX_AGE_DAYS
+    assert linkedin_client.LINKEDIN_LOOKBACK_DAYS <= gmail_client.GMAIL_LOOKBACK_DAYS
 
 
 # --- item 3: Jobbnorge deactivation ---------------------------------------

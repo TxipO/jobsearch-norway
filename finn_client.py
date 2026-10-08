@@ -121,14 +121,22 @@ def sync(conn: sqlite3.Connection) -> dict:
         if upsert_vacancy_row(conn, row, source="finn"):
             upserted += 1
 
-    stats = {"messages": len(texts), "parsed": len(entries), "upserted": upserted}
-    if texts and not entries:
-        # Digest-format drift used to be silent: messages fetched but 0 parsed
-        # printed {"parsed": 0, "upserted": 0}, identical to an idle day
-        # (fullreview Stage 2 item 12, 2026-10-05). The web summary shows
-        # stats dicts, so this makes the drift visible.
+    # Cards are counted straight from the "Flere detaljer:" lines, independent
+    # of the parser, so a card it cannot read is a visible gap and not just a
+    # smaller "parsed" number. Digest drift used to be silent (fullreview Stage
+    # 2 item 12, 2026-10-05) and "0 entries parsed" alone missed a PARTIAL drift:
+    # LinkedIn's parser lost 78% of its mails for weeks (2026-10-08) because a few
+    # old-format mails kept the total above 0. finn is 1456/1456 today.
+    cards = sum(len(re.findall(r"^\s*Flere detaljer:", t, re.M)) for t in texts)
+    stats = {"messages": len(texts), "cards": cards, "parsed": len(entries), "upserted": upserted}
+    if texts and not cards:
         stats["warning"] = (
-            f"{len(texts)} finn.no digest message(s) fetched but 0 entries parsed — "
+            f"{len(texts)} finn.no digest message(s) fetched but no job cards found in them — "
+            f"the digest format may have changed; check parse_digest()."
+        )
+    elif len(entries) < cards:
+        stats["warning"] = (
+            f"{cards - len(entries)} of {cards} finn.no job card(s) could not be parsed — "
             f"the digest format may have changed; check parse_digest()."
         )
     return stats

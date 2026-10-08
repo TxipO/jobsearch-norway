@@ -4,6 +4,8 @@ mocked out per test_jobbnorge_client.py's pattern, no real network calls
 here (that's covered by the manual verification that shaped this module —
 see its docstring for why the list page can't be hit at all)."""
 
+from datetime import datetime, timedelta, timezone
+
 import requests
 
 import db
@@ -161,7 +163,8 @@ def test_sync_upserts_each_known_id(tmp_path, monkeypatch):
 
     result = ec.sync(conn)
 
-    assert result == {"known": 2, "fetched": 1, "failed": 1}
+    assert {k: result[k] for k in ("known", "fetched", "failed")} == {"known": 2, "fetched": 1, "failed": 1}
+    assert "1 of 2" in result["warning"]
     assert db.get_vacancy(conn, "easycruit-sogndal-111")["title"] == "Job A"
     assert db.get_vacancy(conn, "easycruit-sogndal-222") is None
 
@@ -176,4 +179,38 @@ def test_sync_survives_a_network_failure_on_one_id(tmp_path, monkeypatch):
     monkeypatch.setattr(ec, "fetch_vacancy_detail", raise_error)
 
     result = ec.sync(conn)
-    assert result == {"known": 1, "fetched": 0, "failed": 1}
+    assert {k: result[k] for k in ("known", "fetched", "failed")} == {"known": 1, "fetched": 0, "failed": 1}
+
+
+def test_sync_is_silent_when_the_list_is_fresh_and_everything_fetches(tmp_path, monkeypatch):
+    conn = _make_conn(tmp_path)
+    ec.set_known_ids(conn, [("111", "1")])
+    row = {"uuid": "easycruit-sogndal-111", "status": "ACTIVE", "title": "Job A",
+           "description": "A real description long enough to matter here today.",
+           "municipal": "Sogndal", "county": "Vestland", "business_name": "Sogndal kommune",
+           "employer_name": "Sogndal kommune", "application_url": "https://x", "link": "https://x",
+           "application_due": None, "engagement_type": None, "extent": None, "sector": None}
+    monkeypatch.setattr(ec, "fetch_vacancy_detail", lambda vid, did: row)
+    assert ec.sync(conn) == {"known": 1, "fetched": 1, "failed": 0}
+
+
+def test_sync_warns_when_the_hand_maintained_list_has_gone_stale(tmp_path, monkeypatch):
+    """2026-10-08: the id list sat untouched for two months while Sogndal posted
+    four new vacancies (the list page is behind a WAF challenge, so nothing can
+    discover them automatically) — and the only symptom was "failed: 8" for the
+    closed ones. A list older than IDS_STALE_AFTER_DAYS is now reported."""
+    conn = _make_conn(tmp_path)
+    ec.set_known_ids(conn, [])
+    old = (datetime.now(timezone.utc) - timedelta(days=ec.IDS_STALE_AFTER_DAYS + 1)).strftime("%Y-%m-%d %H:%M:%S")
+    db.set_state(conn, ec.IDS_REFRESHED_AT_KEY, old)
+    assert "last refreshed" in ec.sync(conn)["warning"]
+
+    ec.set_known_ids(conn, [])  # refreshing the list clears it
+    assert "warning" not in ec.sync(conn)
+
+
+def test_sync_warns_when_the_list_has_no_refresh_date_at_all(tmp_path):
+    """A database from before this timestamp existed: treat unknown as stale."""
+    conn = _make_conn(tmp_path)
+    db.set_state(conn, ec.KNOWN_IDS_KEY, "[]")
+    assert "never" in ec.sync(conn)["warning"]

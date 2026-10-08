@@ -37,10 +37,35 @@ BLOCK_SPLIT_RE = re.compile(r"-{20,}")
 # assume every job link is always www.
 VIEW_JOB_RE = re.compile(r"https://(?:www|[a-z]{2})\.linkedin\.com/comm/jobs/view/(\d+)")
 
+# Lines in a digest that are NOT part of a job card: the alert header, the
+# "N jobs match your preferences" line, and the section headers of a
+# multi-alert digest ("See all jobs on LinkedIn: <url>", "New jobs from your
+# other alerts", "<strong>Q</strong> jobs in Norway", "Edit alert <url>").
+# Anything carrying a URL or an HTML tag is also never title/employer/location.
+_NON_CARD_LINE_RE = re.compile(
+    r"https?://|<[^>]+>"
+    r"|^(?:Your job alert for\b|New jobs from your other alerts|See all jobs\b|Edit alert\b"
+    r"|Manage (?:your )?(?:job )?alerts?\b)"
+    r"|\bjobs?\s+match(?:es)?\s+your\s+preferences",
+    re.I,
+)
+_REGION_WORDS_RE = re.compile(r"^Greater\s+|\s+(?:Metropolitan\s+)?(?:Region|Area)$", re.I)
+
+
+# Shorter than the shared 60-day window on purpose. A LinkedIn digest carries no
+# deadline and no closing signal, and a job shows up in the digests for a median
+# of ONE day (p90 20 days, measured on 309 jobs, 2026-10-08) — so a card from a
+# mail 40 days old is almost certainly a closed job, yet a row's first_seen_at
+# starts the moment we insert it. With the 60-day window, the first sync after
+# the 2026-10-08 parser fix would have inserted 107 jobs last seen 31-60 days
+# ago as "new". 21 days still covers a three-week gap between syncs.
+LINKEDIN_LOOKBACK_DAYS = 21
+
 
 def fetch_digest_texts() -> list[str]:
-    """One text body per LinkedIn job-alert email currently in the mailbox."""
-    return fetch_plain_texts(digest_query("from:jobalerts-noreply@linkedin.com"))
+    """One text body per LinkedIn job-alert email in the last
+    LINKEDIN_LOOKBACK_DAYS days."""
+    return fetch_plain_texts(digest_query("from:jobalerts-noreply@linkedin.com", LINKEDIN_LOOKBACK_DAYS))
 
 
 def _strip_employer_suffix(title: str, employer: str) -> str:
@@ -57,15 +82,20 @@ def _strip_employer_suffix(title: str, employer: str) -> str:
 
 
 def parse_digest(text: str) -> list[dict]:
-    """Split on the dashed rules between job cards, then within each block
-    find the "View job: {url}" line and walk backward to the location line
-    (ends in ", Norway" — badge lines like "N company alum" sit between
-    location and "View job:" so can't be counted forward from the block
-    start), employer is the line above location, title the line above that.
-    Anchoring backward from "View job:" instead of forward from the block
-    start avoids the intro/preamble text in the email's first block being
-    mistaken for a job title. Verified against two live 2026-08-09/08-10
-    auto-forwarded digest emails (5 and 6 jobs respectively, all correct)."""
+    """Split on the dashed rules between job cards; within each block, drop
+    the non-card lines (alert header, section headers — see _NON_CARD_LINE_RE)
+    and read what is left before "View job: {url}" as title, employer,
+    location, then optional badge lines ("This company is actively hiring",
+    "Apply with resume & profile", "N connections", "N company alum").
+
+    Reads from the FRONT of the card, not back from a ", Norway" suffix: the
+    original anchor required the location line to end in ", Norway", but
+    LinkedIn writes most places bare ("Bergen", "Stavanger/Sandnes", "Greater
+    Oslo Region", "Lindesnes") and only some as "Oslo, Norway" — so 157 of 201
+    digest mails parsed to nothing and 276 of 309 distinct jobs in the last 60
+    days never reached the DB (found 2026-10-08). Checked against all 201 live
+    digests: every "View job:" anchor yields an entry (756/756), and no title,
+    employer or location carries a URL or HTML tag."""
     entries = []
     for block in BLOCK_SPLIT_RE.split(text):
         lines = [l.strip() for l in block.splitlines() if l.strip()]
@@ -75,26 +105,40 @@ def parse_digest(text: str) -> list[dict]:
         m = VIEW_JOB_RE.search(lines[view_idx])
         if not m:
             continue
-        loc_idx = next((i for i in range(view_idx - 1, -1, -1) if lines[i].endswith(", Norway")), None)
-        if loc_idx is None or loc_idx < 2:
+        card = [l for l in lines[:view_idx] if not _NON_CARD_LINE_RE.search(l)]
+        if len(card) < 3:
             continue
-        employer = lines[loc_idx - 1]
+        title, employer, location = card[:3]
         entries.append({
             "job_id": m.group(1),
-            "title": _strip_employer_suffix(lines[loc_idx - 2], employer),
+            "title": _strip_employer_suffix(title, employer),
             "employer": employer,
-            "location": lines[loc_idx],
+            "location": location,
         })
     return entries
 
 
+def _resolve_location(location: str, municipality_county: dict[str, str]) -> tuple[str | None, str | None]:
+    """LinkedIn location line -> (municipal, county). Forms seen in 201 live
+    digests: "Oslo", "Oslo, Norway", "Drammen, Viken, Norway", "Greater Oslo
+    Region", "Trondheim Region", "Stavanger/Sandnes" (two adjacent places),
+    "Vestland, Norway" (a county, not a municipality) and a bare "Norway"
+    (nationwide — no usable location)."""
+    place = re.sub(r",\s*Norway$", "", location.strip(), flags=re.I)
+    if place.lower() == "norway":
+        return None, None
+    place = _REGION_WORDS_RE.sub("", place.split(",")[0]).strip()
+    parts = [p.strip() for p in place.split("/") if p.strip()] or [place]
+    for part in parts:
+        county = municipality_county.get(part.upper())
+        if county:
+            return parts[0], county
+    counties = {c.upper(): c for c in municipality_county.values()}
+    return parts[0], counties.get(parts[0].upper())
+
+
 def to_vacancy_row(entry: dict, municipality_county: dict[str, str]) -> dict:
-    # "Oslo, Oslo, Norway" / "Drammen, Viken, Norway" / "Oslo, Norway" (no
-    # county segment) all start with the kommune — take the first comma
-    # segment regardless of how many follow, rather than parsing "Norway"
-    # or the county name specifically (which isn't always present).
-    municipal = entry["location"].split(",")[0].strip()
-    county = municipality_county.get(municipal.upper())
+    municipal, county = _resolve_location(entry["location"], municipality_county)
     url = f"https://www.linkedin.com/jobs/view/{entry['job_id']}"
     return {
         "uuid": f"linkedin-{entry['job_id']}",
@@ -135,14 +179,21 @@ def sync(conn: sqlite3.Connection) -> dict:
         if upsert_vacancy_row(conn, row, source="linkedin"):
             upserted += 1
 
-    stats = {"messages": len(texts), "parsed": len(entries), "upserted": upserted}
-    if texts and not entries:
-        # Digest-format drift used to be silent: messages fetched but 0 parsed
-        # printed {"parsed": 0, "upserted": 0}, identical to an idle day
-        # (fullreview Stage 2 item 12, 2026-10-05). The web summary shows
-        # stats dicts, so this makes the drift visible.
+    # Count the cards independently of the parser, so cards it cannot read show
+    # up as a gap instead of vanishing. The old "0 entries parsed" warning (digest
+    # drift used to be silent — fullreview Stage 2 item 12, 2026-10-05) never
+    # fired for the 2026-10-08 incident: 78% of the mails parsed to nothing for
+    # weeks, but a few old-format mails still parsed, so the total was never 0.
+    cards = sum(len(re.findall(r"^\s*View job:", t, re.M)) for t in texts)
+    stats = {"messages": len(texts), "cards": cards, "parsed": len(entries), "upserted": upserted}
+    if texts and not cards:
         stats["warning"] = (
-            f"{len(texts)} LinkedIn digest message(s) fetched but 0 entries parsed — "
+            f"{len(texts)} LinkedIn digest message(s) fetched but no job cards found in them — "
+            f"the digest format may have changed; check parse_digest()."
+        )
+    elif len(entries) < cards:
+        stats["warning"] = (
+            f"{cards - len(entries)} of {cards} LinkedIn job card(s) could not be parsed — "
             f"the digest format may have changed; check parse_digest()."
         )
     return stats

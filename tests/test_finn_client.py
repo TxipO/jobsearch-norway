@@ -67,10 +67,18 @@ def test_sync_reports_messages_and_warns_when_digest_format_drifted(tmp_path, mo
     # Genuinely idle (no messages): no warning.
     monkeypatch.setattr(finn_client, "fetch_digest_texts", lambda: [])
     stats = finn_client.sync(conn)
-    assert stats == {"messages": 0, "parsed": 0, "upserted": 0}
+    assert stats == {"messages": 0, "cards": 0, "parsed": 0, "upserted": 0}
 
     # Healthy digest: parsed > 0, no warning.
     ok = _digest("Selger\nNordspec AS, Laksevåg\nFlere detaljer: https://www.finn.no/111")
     monkeypatch.setattr(finn_client, "fetch_digest_texts", lambda: [ok])
     stats = finn_client.sync(conn)
-    assert stats == {"messages": 1, "parsed": 1, "upserted": 1}
+    assert stats == {"messages": 1, "cards": 1, "parsed": 1, "upserted": 1}
+
+    # Partial drift: one readable card and one the parser cannot read. "parsed" is
+    # still > 0, so only the card count can show the gap.
+    half = ok + "\n" + "-" * 30 + "\nFlere detaljer: not-a-finn-url\n"
+    monkeypatch.setattr(finn_client, "fetch_digest_texts", lambda: [half])
+    stats = finn_client.sync(conn)
+    assert stats["cards"] == 2 and stats["parsed"] == 1
+    assert "1 of 2" in stats["warning"]

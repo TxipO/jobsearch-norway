@@ -43,11 +43,13 @@ GMAIL_LOOKBACK_DAYS = 60
 logger = logging.getLogger(__name__)
 
 
-def digest_query(base: str) -> str:
-    """`base` ("from:finn.no") limited to the last GMAIL_LOOKBACK_DAYS days.
-    fetch_plain_texts wraps the whole string in double quotes for X-GM-RAW,
-    so the operators just go space-separated inside — no extra quoting."""
-    return f"{base} newer_than:{GMAIL_LOOKBACK_DAYS}d"
+def digest_query(base: str, days: int = GMAIL_LOOKBACK_DAYS) -> str:
+    """`base` ("from:finn.no") limited to the last `days` days (default
+    GMAIL_LOOKBACK_DAYS; a source may pass a shorter window, never a longer
+    one). fetch_plain_texts wraps the whole string in double quotes for
+    X-GM-RAW, so the operators just go space-separated inside — no extra
+    quoting."""
+    return f"{base} newer_than:{days}d"
 
 
 class GmailMailboxError(Exception):
