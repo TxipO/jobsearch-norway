@@ -321,8 +321,8 @@ _HEALTH_CONTEXT_RE = re.compile(
 )
 
 # Norwegian government/defense security clearance (sikkerhetsklarering) —
-# requires Norwegian citizenship in practice (sikkerhetsloven), unreachable
-# for someone without protection status yet, let alone citizenship. Reported
+# requires Norwegian citizenship in practice (sikkerhetsloven), so it is
+# unreachable for a non-citizen whatever their residence status. Reported
 # live 2026-07-18 (Forsvaret cyber-defense posting: "Du må kunne
 # sikkerhetsklareres til HEMMELIG og NATO SECRET før tiltredelse"). Body-level
 # like BODY_AUTHORISATION_PATTERNS, not title-level — defense/police/security
