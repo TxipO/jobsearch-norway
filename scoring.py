@@ -101,9 +101,14 @@ GENERAL_ENTRY_TITLE_KEYWORDS = ["vikar", "deltid"]
 # changes. See jobsearch-norway-profile memory, "Напрямок пошуку" section.
 DEV_SECURITY_KEYWORDS = [
     "python", "backend", "developer", "utvikler", "programmer", "programmerer",
-    "cybersecurity", "cyber security", "informasjonssikkerhet", "sikkerhet",
+    "cybersecurity", "cyber security", "informasjonssikkerhet",
     "software engineer", "software developer",
 ]
+# Bare "sikkerhet" removed 2026-10-10: measured on the live corpus it was the
+# ONLY dev-track match in 673 of 7530 visible vacancies (9%) — HMS/safety,
+# security-guard, "sikkerhet og kvalitet" boilerplate, nothing to do with IT.
+# Narrow compounds below keep the real cases.
+DEV_SECURITY_KEYWORDS += ["it-sikkerhet", "cybersikkerhet", "datasikkerhet"]
 
 # Specific enough phrases that they're safe to match anywhere in the body —
 # unlike a bare "junior"/"trainee", these don't false-positive on ads that
@@ -578,7 +583,12 @@ def score_vacancy(
     # manager). Two of them were user-flagged the same day.
     if it_kw in (["feilsøking"], ["troubleshooting"], ["feilsøking", "troubleshooting"]):
         it_hits, it_kw = 0, []
-    it_score = min(it_hits * 8, 40)
+    # 2026-10-10: the IT-support and dev tracks are zeroed in the "warehouse"
+    # profile (matched keywords stay in the breakdown), mirroring how the
+    # "it" profile zeroes the warehouse track. Before this the warehouse
+    # top-100 held 13 IT-support vacancies — the user switches to "Склад"
+    # precisely to not see them.
+    it_score = min(it_hits * 8, 40) if profile == "it" else 0
     breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}
 
     # Two profiles, 2026-08-27 user-requested toggle: "warehouse" is the
@@ -597,7 +607,7 @@ def score_vacancy(
     breakdown["track_general_entry_level"] = {"points": entry_track_score, "matched": entry_kw + entry_title_hits}
 
     dev_hits, dev_kw = _count_keyword_hits(text, DEV_SECURITY_KEYWORDS)
-    dev_score = min(dev_hits * 3, 15)
+    dev_score = min(dev_hits * 3, 15) if profile == "it" else 0
     breakdown["track_dev_security"] = {"points": dev_score, "matched": dev_kw}
 
     is_dev_title = any(kw in title_l for kw in DEV_TITLE_KEYWORDS)

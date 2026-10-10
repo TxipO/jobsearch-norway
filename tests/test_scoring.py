@@ -516,7 +516,7 @@ def test_feilsoking_alone_does_not_grant_it_support_bonus():
     Only counts alongside another real IT-support keyword."""
     _, bd = _score("Industrimekaniker", "Du driver feilsøking og reparasjon av maskiner.")
     assert bd["track_it_support"]["points"] == 0
-    _, bd = _score("IT-konsulent", "Du driver med feilsøking og brukerstøtte for våre kunder.")
+    _, bd = _score("IT-konsulent", "Du driver med feilsøking og brukerstøtte for våre kunder.", profile="it")
     assert bd["track_it_support"]["points"] > 0
 
 
@@ -527,7 +527,7 @@ def test_english_troubleshooting_alone_does_not_grant_it_support_bonus():
     user-flagged the same day for showing up in an IT list."""
     _, bd = _score("Experienced Electricians Wanted", "Electrical troubleshooting and repair on site.")
     assert bd["track_it_support"]["points"] == 0
-    _, bd = _score("IT Support Technician", "Troubleshooting and helpdesk duties for Windows clients.")
+    _, bd = _score("IT Support Technician", "Troubleshooting and helpdesk duties for Windows clients.", profile="it")
     assert bd["track_it_support"]["points"] > 0
 
 
@@ -716,3 +716,24 @@ def test_salary_last_group_is_not_truncated_or_extended_into_trailing_digits():
     assert _parse_salary("kr 600 000 100") == "kr 600 000"
     assert _parse_salary("Lønn kr 1 000 000 per år") == "kr 1 000 000"
     assert _parse_salary("lønn mellom 380 000 og 520 000 kr") == "kr 380 000 – 520 000"
+
+
+def test_warehouse_profile_zeroes_it_and_dev_tracks_but_keeps_the_matches():
+    """2026-10-10: switching to "Склад" still showed IT-support vacancies in
+    its top-100 (13 of 100) because only the warehouse track was
+    profile-specific. The matched keywords stay visible, worth 0 points."""
+    title, text = "IT Support / Brukerstøtte", "Servicedesk, helpdesk og Windows. Python er en fordel."
+    _, wh = _score(title, text, profile="warehouse")
+    _, it = _score(title, text, profile="it")
+    assert wh["track_it_support"]["points"] == 0 and wh["track_it_support"]["matched"]
+    assert wh["track_dev_security"]["points"] == 0
+    assert it["track_it_support"]["points"] > 0 and it["track_dev_security"]["points"] > 0
+
+
+def test_bare_sikkerhet_is_not_a_dev_security_keyword():
+    """673 of 7530 visible vacancies had bare "sikkerhet" as their only
+    dev-track match (HMS/safety copy). Real IT-security compounds still count."""
+    _, bd = _score("Lagermedarbeider", "Sikkerhet og kvalitet er viktig for oss. HMS og sikkerhet.", profile="it")
+    assert bd["track_dev_security"]["points"] == 0
+    _, bd = _score("Rådgiver", "Ansvar for IT-sikkerhet og cybersikkerhet.", profile="it")
+    assert bd["track_dev_security"]["points"] > 0
