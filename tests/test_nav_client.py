@@ -19,6 +19,7 @@ There were no nav_client tests at all before this, which is why it survived
 days of daily use.
 """
 
+import time
 import db
 import nav_client
 
@@ -389,3 +390,73 @@ def test_recovery_clears_the_failure_counter(tmp_path, monkeypatch):
     failing.add("c")
     nav_client.sync(conn)
     assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY)) == {"c": 1}
+
+
+def _many_ads_page(n):
+    return {"p1": {"items": [_entry(f"a{i}") for i in range(n)], "next_id": "p2"},
+            "p2": {"items": [], "etag": "tip"}}
+
+
+def test_total_outage_never_writes_ads_off(tmp_path, monkeypatch):
+    """2026-10-10: NAV's detail endpoint answered in 13-30 s and ~1 in 5
+    timed out. When EVERY fetch fails the fault is the service, not the ads:
+    the per-ad give-up counter must stay untouched, however many syncs it lasts."""
+    import json
+    ads = [f"a{i}" for i in range(10)]
+    _install_flaky_feed(monkeypatch, _many_ads_page(10), set(ads),
+                        lambda: nav_client.requests.ReadTimeout("slow"))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    for _ in range(nav_client.MAX_DETAIL_HOLDS + 2):
+        stats = nav_client.sync(conn)
+        assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+        assert stats["nav_degraded"] is True and stats["detail_missing"] == 0
+    assert json.loads(db.get_state(conn, nav_client.FAILURES_KEY) or "{}") == {}
+
+
+def test_breaker_stops_the_page_after_consecutive_failures(tmp_path, monkeypatch):
+    """A page of 40 ads where every fetch times out must not cost 40 timeouts."""
+    calls = []
+    pages = _many_ads_page(40)
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/feedentry/" in url:
+            calls.append(url)
+            time.sleep(0.05)  # a real timeout is slow; instant failures would outrun the cancel
+            raise nav_client.requests.ReadTimeout("slow")
+        page_id = url.rsplit("/", 1)[-1]
+        return _Resp(200, {"id": page_id, "items": pages[page_id]["items"],
+                           "next_id": pages[page_id].get("next_id")})
+
+    monkeypatch.setattr(nav_client.requests, "get", fake_get)
+    monkeypatch.setattr(nav_client, "get_token", lambda: "tok")
+    monkeypatch.setattr(nav_client, "DETAIL_FETCH_WORKERS", 1)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    stats = nav_client.sync(conn)
+
+    # the breaker trips on the 5th failure; at most one more fetch (1 worker) was already in flight
+    assert nav_client.BREAKER_FAILURES <= len(calls) <= nav_client.BREAKER_FAILURES + 1
+    assert stats["nav_degraded"] is True
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+
+
+def test_single_broken_ad_still_gives_up_when_the_service_answers(tmp_path, monkeypatch):
+    """The one-ad tip page with no success next to it: the probe (an ad we
+    already hold) answers, so the failure is the ad's own and the cap applies."""
+    pages = {"p1": {"items": [_entry("ok")], "next_id": "p2"},
+             "p2": {"items": [_entry("bad")], "etag": "tip"}}
+    failing = set()
+    _install_flaky_feed(monkeypatch, pages, failing, lambda: nav_client.requests.ConnectionError("boom"))
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+    nav_client.sync(conn)  # imports "ok", cursor now on p2
+    failing.add("bad")
+
+    for n in range(nav_client.MAX_DETAIL_HOLDS):
+        stats = nav_client.sync(conn)
+        assert stats["detail_errors"] == 1 and "nav_degraded" not in stats, n
+    stats = nav_client.sync(conn)
+    assert stats["detail_missing"] == 1 and "nav_degraded" not in stats

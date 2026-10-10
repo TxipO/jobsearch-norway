@@ -132,6 +132,13 @@ def test_finn_going_quiet_is_caught_by_freshness(tmp_path):
     assert finn["level"] == "warn" and "Gmail" in finn["message"]
 
 
+def test_nav_degraded_says_the_fault_is_on_nav_side(tmp_path):
+    conn = _healthy_conn(tmp_path)
+    stats = {"pages": 1, "new": 0, "updated": 0, "unchanged": 0, "marked_inactive": 0, "detail_missing": 0, "detail_errors": 12, "nav_degraded": True}
+    nav = _by_source(health.evaluate_sources(conn, _summary(stats=stats), now=NOW))["NAV"]
+    assert nav["level"] == "warn" and "з їхнього боку" in nav["message"] and "нічого не втрачено" in nav["message"]
+
+
 def test_nav_detail_errors_are_surfaced_as_a_paused_import(tmp_path):
     conn = _healthy_conn(tmp_path)
     stats = {"pages": 1, "new": 0, "updated": 0, "unchanged": 0, "marked_inactive": 0, "detail_missing": 0, "detail_errors": 3}

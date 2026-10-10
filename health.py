@@ -97,7 +97,10 @@ def evaluate_sources(conn, summary: dict | None, now: datetime | None = None) ->
             level = "bad" if source in _DATA_LOSS_SOURCES else "warn"
             issues.append(_issue(label, level, str(stats["warning"])))
 
-        if source == "nav" and stats.get("detail_errors"):
+        if source == "nav" and stats.get("nav_degraded"):
+            issues.append(_issue(label, "warn", "API NAV зараз повільне або недоступне (з їхнього боку) — імпорт на паузі, "
+                                 "нічого не втрачено, наступний sync повторить цю сторінку"))
+        elif source == "nav" and stats.get("detail_errors"):
             issues.append(_issue(label, "warn", f"{stats['detail_errors']} оголошень не завантажились — курсор фіда "
                                  "тримається на цій сторінці, імпорт призупинено до наступного sync"))
 

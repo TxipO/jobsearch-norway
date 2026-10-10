@@ -35,6 +35,16 @@ ETAG_KEY = "nav_feed_cursor_etag"
 FAILURES_KEY = "nav_detail_failures"
 MAX_DETAIL_HOLDS = 3
 
+# NAV's feed backend is sometimes just slow: 2026-10-10 single detail requests
+# took 13-30 s and ~1 in 5 timed out, with no load from us. The hold counter
+# above must not treat that as "this ad is poisoned" — three slow syncs would
+# otherwise write off a whole page of real vacancies. Successful answers came
+# back as late as 30.5 s, so the read timeout needs headroom; and after
+# BREAKER_FAILURES transient failures in a row the rest of the page is
+# abandoned instead of burning ~10 minutes on requests that will time out.
+DETAIL_TIMEOUT = (10, 60)  # (connect, read) seconds
+BREAKER_FAILURES = 5
+
 
 def get_token() -> str:
     token = os.environ.get("NAV_FEED_TOKEN")
@@ -56,10 +66,29 @@ def _headers(token: str) -> dict:
 
 def _fetch_ad_detail(token: str, uuid: str) -> dict | None:
     resp = requests.get(
-        f"{BASE_URL}/api/v1/feedentry/{uuid}", headers=_headers(token), timeout=30
+        f"{BASE_URL}/api/v1/feedentry/{uuid}", headers=_headers(token), timeout=DETAIL_TIMEOUT
     )
     resp.raise_for_status()
     return resp.json().get("ad_content")
+
+
+def _service_answers(conn: sqlite3.Connection, token: str) -> bool:
+    """Probe with an ad we already hold, to tell "the NAV feed is down/slow"
+    from "this one ad is broken" when a whole page failed with no success to
+    compare against. A 4xx still counts as an answer. No stored ad to probe
+    with -> assume healthy (the per-ad cap then behaves as it always did)."""
+    row = conn.execute(
+        "SELECT uuid FROM vacancies WHERE source = 'nav' ORDER BY first_seen_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return True
+    try:
+        _fetch_ad_detail(token, row[0])
+    except requests.RequestException as e:
+        return _is_permanent_detail_error(e)
+    except ValueError:
+        return False
+    return True
 
 
 def _is_permanent_detail_error(exc: requests.RequestException) -> bool:
@@ -149,6 +178,10 @@ def sync(conn: sqlite3.Connection) -> dict:
         # thread; worker threads only ever touch the network, never `conn`.
         page_detail_errors = 0
         failures_before = dict(failures)
+        transient: list[str] = []  # uuids whose detail failed transiently on this page
+        successes = 0
+        in_a_row = 0
+        tripped = False
         if active_uuids:
             with concurrent.futures.ThreadPoolExecutor(max_workers=DETAIL_FETCH_WORKERS) as pool:
                 future_to_uuid = {pool.submit(_fetch_ad_detail, token, u): u for u in active_uuids}
@@ -159,19 +192,19 @@ def sync(conn: sqlite3.Connection) -> dict:
                     except (requests.RequestException, ValueError) as e:
                         # ValueError: a 200 whose body is not valid JSON —
                         # transient like a 5xx (and capped the same way).
-                        logger.warning(f"Detail fetch failed for {uuid} ({e})")
+                        logger.debug(f"Detail fetch failed for {uuid} ({e})")
                         if _is_permanent_detail_error(e):
                             stats["detail_missing"] += 1
-                        elif failures.get(uuid, 0) >= MAX_DETAIL_HOLDS:
-                            logger.warning(
-                                f"Giving up on {uuid}: detail failed on {MAX_DETAIL_HOLDS} "
-                                f"consecutive held syncs; counting it as missing so the cursor can advance."
-                            )
-                            stats["detail_missing"] += 1
-                        else:
-                            failures[uuid] = failures.get(uuid, 0) + 1
-                            page_detail_errors += 1
+                            continue
+                        transient.append(uuid)
+                        in_a_row += 1
+                        if in_a_row >= BREAKER_FAILURES:
+                            tripped = True
+                            pool.shutdown(wait=False, cancel_futures=True)
+                            break
                         continue
+                    in_a_row = 0
+                    successes += 1
                     failures.pop(uuid, None)
                     if ad is None:
                         # No content is a stable answer, not a transient
@@ -194,6 +227,27 @@ def sync(conn: sqlite3.Connection) -> dict:
                     else:
                         stats["updated"] += 1
 
+        if transient:
+            # Outage vs one broken ad: a breaker trip is an outage by
+            # definition; a page with no success at all is checked with a probe.
+            # During an outage nothing is charged to the ads — only a failure
+            # next to successes (or with the service answering) counts toward
+            # MAX_DETAIL_HOLDS.
+            if tripped or (successes == 0 and not _service_answers(conn, token)):
+                stats["nav_degraded"] = True
+                page_detail_errors = len(transient)
+            else:
+                for uuid in transient:
+                    if failures.get(uuid, 0) >= MAX_DETAIL_HOLDS:
+                        logger.warning(
+                            f"Giving up on {uuid}: detail failed on {MAX_DETAIL_HOLDS} "
+                            f"consecutive held syncs; counting it as missing so the cursor can advance."
+                        )
+                        stats["detail_missing"] += 1
+                    else:
+                        failures[uuid] = failures.get(uuid, 0) + 1
+                        page_detail_errors += 1
+
         if failures != failures_before:
             _save_failures(conn, failures)
 
@@ -206,8 +260,10 @@ def sync(conn: sqlite3.Connection) -> dict:
             # next sync re-reads it. Re-processing is idempotent.
             stats["detail_errors"] += page_detail_errors
             logger.warning(
-                f"{page_detail_errors} detail fetch(es) failed on page {page.get('id')}; "
-                f"cursor held there so the next sync retries it."
+                f"{page_detail_errors} of {len(active_uuids)} detail fetch(es) failed on page "
+                f"{page.get('id')}"
+                + (" — NAV feed slow/unreachable, abandoned the rest of the page" if tripped else "")
+                + "; cursor held there so the next sync retries it."
             )
             break
 
