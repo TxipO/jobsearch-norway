@@ -251,6 +251,7 @@ templates.env.globals["OCCUPATION_CATEGORIES"] = OCCUPATION_CATEGORIES
 BREAKDOWN_LABELS = {
     "language_bonus": "Мова оголошення (англійська)",
     "track_it_support": "IT-support ключові слова",
+    "nav_it_operations": "NAV: IT / drift og vedlikehold",
     "track_general_entry_level": "Entry-level (виробництво/склад/логістика)",
     "track_dev_security": "Dev/security ключові слова",
     "entry_level_bonus": "Явно entry-level / без досвіду",

@@ -568,6 +568,24 @@ def _parse_occupation_category_level1(occupation_categories: str | None) -> set[
     return {c.get("level1") for c in cats if isinstance(c, dict) and c.get("level1")}
 
 
+def _has_nav_it_operations_tag(occupation_categories: str | None) -> bool:
+    """NAV's IT/"Drift, vedlikehold" subcategory (IT operations, support).
+    Deliberately NOT a penalty for IT/"Utvikling": measured 2026-10-10, that
+    tag also sits on IT-konsulent / M365 / applikasjonstekniker roles the
+    user applied to (139 of 179 active IT vacancies carry only it), so it is
+    no dev signal."""
+    if not occupation_categories:
+        return False
+    try:
+        cats = json.loads(occupation_categories)
+    except (ValueError, TypeError):
+        return False
+    return any(
+        isinstance(c, dict) and c.get("level1") == "IT" and c.get("level2") == "Drift, vedlikehold"
+        for c in cats
+    )
+
+
 def score_vacancy(
     title: str | None,
     description_html: str | None,
@@ -605,8 +623,16 @@ def score_vacancy(
     # "it" profile zeroes the warehouse track. Before this the warehouse
     # top-100 held 13 IT-support vacancies — the user switches to "Склад"
     # precisely to not see them.
-    it_score = min(it_hits * 8, 40) if profile == "it" else 0
+    # A keyword in the TITLE describes the position itself and counts double
+    # (2026-10-10): every role the user actually applied to has its IT word in
+    # the title, while the same words in the body are often just the tools
+    # list or employer copy. Same cap as before.
+    it_title_hits = sum(1 for kw in it_kw if kw in title_l)
+    it_score = min((it_hits + it_title_hits) * 8, 40) if profile == "it" else 0
     breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}
+    nav_it_ops = _has_nav_it_operations_tag(occupation_categories)
+    nav_it_ops_points = 8 if nav_it_ops and profile == "it" else 0
+    breakdown["nav_it_operations"] = {"points": nav_it_ops_points, "matched": nav_it_ops}
 
     # Two profiles, 2026-08-27 user-requested toggle: "warehouse" is the
     # 2026-08-18 retarget (production/склад/логистика, current default),
@@ -618,8 +644,9 @@ def score_vacancy(
     # of which profile is active.
     entry_hits, entry_kw = _count_keyword_hits(text, GENERAL_ENTRY_KEYWORDS)
     entry_title_hits = [kw for kw in GENERAL_ENTRY_TITLE_KEYWORDS if kw in title_l]
+    entry_kw_in_title = sum(1 for kw in entry_kw if kw in title_l)  # title match counts double
     entry_track_score = (
-        min((entry_hits + len(entry_title_hits)) * 6, 30) if profile == "warehouse" else 0
+        min((entry_hits + len(entry_title_hits) + entry_kw_in_title) * 6, 30) if profile == "warehouse" else 0
     )
     breakdown["track_general_entry_level"] = {"points": entry_track_score, "matched": entry_kw + entry_title_hits}
 
@@ -751,7 +778,10 @@ def score_vacancy(
     # profile's own track matched; for warehouse NAV's category tag also
     # counts, unless the title reads as a professional role.
     if profile == "it":
-        relevant = it_score > 0
+        # Two weighted hits, not one: a lone "førstelinje" is also a law
+        # firm's / call centre's "first line" (measured 2026-10-10: it made
+        # "Bruk jussen til å løse eiendomsspørsmål" a top-10 IT result).
+        relevant = it_score >= 16 or nav_it_ops
     else:
         relevant = entry_track_score > 0 or (category_bonus > 0 and not _PROFESSIONAL_TITLE_RE.search(title_l))
     context_points = sum(

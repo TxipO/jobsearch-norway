@@ -761,3 +761,21 @@ def test_nav_category_alone_makes_a_production_job_relevant_but_not_an_engineer(
     _, bd = _score("Firmware Engineer", "Join our team.", municipal="OSLO", county="OSLO",
                    occupation_categories=cats, profile="warehouse")
     assert bd["context_gate"]["points"] < 0
+
+
+def test_nav_it_operations_tag_helps_it_profile_but_utvikling_is_not_penalized():
+    ops = '[{"level1": "IT", "level2": "Drift, vedlikehold"}]'
+    dev = '[{"level1": "IT", "level2": "Utvikling"}]'
+    _, bd = _score("IT-medarbeider", "Hos oss.", occupation_categories=ops, profile="it")
+    assert bd["nav_it_operations"]["points"] == 8
+    _, bd = _score("IT-medarbeider", "Hos oss.", occupation_categories=ops, profile="warehouse")
+    assert bd["nav_it_operations"]["points"] == 0
+    s_dev, bd = _score("IT-konsulent", "Brukerstøtte og servicedesk.", occupation_categories=dev, profile="it")
+    s_plain, _ = _score("IT-konsulent", "Brukerstøtte og servicedesk.", profile="it")
+    assert s_dev == s_plain, "the NAV 'Utvikling' tag sits on IT-konsulent roles; it must not move the score"
+
+
+def test_title_keyword_counts_double_for_it_track():
+    _, in_body = _score("Konsulent", "Du jobber med servicedesk.", profile="it")
+    _, in_title = _score("Servicedesk konsulent", "Du jobber.", profile="it")
+    assert in_title["track_it_support"]["points"] == 2 * in_body["track_it_support"]["points"]
