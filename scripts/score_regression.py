@@ -30,7 +30,12 @@ CONTROL_STATUSES = ("applied", "interesting", "offer", "rejected")
 TOP_PERCENTILE = 95
 # Title substrings (lowercase) allowed to fall out of the top 5% — one line
 # each, with the reason, so a drop here is a decision and not an accident.
-EXPECTED_DROPS: dict[str, str] = {}
+EXPECTED_DROPS: dict[str, str] = {
+    # 2026-10-10 relevance gate: wh signal was only NAV's broad "Industri og
+    # produksjon" tag on an engineering title; these live in the IT profile.
+    "graduate 2025 - solution engineer": "engineering title, tag-only warehouse signal",
+    "testingeniør/ testtekniker": "engineering title, tag-only warehouse signal",
+}
 
 
 def _scores(conn) -> dict[str, dict]:

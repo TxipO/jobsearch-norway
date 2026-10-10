@@ -267,6 +267,7 @@ BREAKDOWN_LABELS = {
     "relocation_worthiness_penalty": "Переїзд не виправданий (частина ставки / короткий vikariat)",
     "formal_qualification_penalty": "Формальна кваліфікація (fagbrev/диплом), не IT-профіль",
     "programming_experience_penalty": "Вимагає досвід програмування",
+    "context_gate": "Немає збігу з профілем режиму — бонуси локації/remote/мови знижено",
 }
 BREAKDOWN_ORDER = list(BREAKDOWN_LABELS.keys())
 

@@ -513,6 +513,23 @@ def _has_programming_experience_requirement(text: str) -> bool:
     return False
 
 
+# Context bonuses (location, remote, English-language, entry-level) say how
+# nice a job is, not whether it is one of ours. Without a gate a vacancy with
+# NO match for the active profile still collected up to +47 of them: measured
+# 2026-10-10, 33 of the IT-profile top 50 had zero IT match ("Project
+# Controller, Bergen, remote" 45 vs "IT Support / Brukerstøtte" 50) and the
+# warehouse top 30 held Firmware/GTM/Engineering Managers whose only
+# "warehouse" signal was NAV's broad "Industri og produksjon" tag.
+CONTEXT_GATE_FACTOR = 0.25
+# Professional-role titles: NAV's "Industri og produksjon"/"Transport og lager"
+# tag alone does not make these warehouse/production work.
+_PROFESSIONAL_TITLE_RE = re.compile(
+    r"engineer|ingeniør|manager|leder|sjef|controller|analyst|arkitekt|rådgiver|rådgjevar|"
+    r"advis[eo]r|konsulent|consultant|special|spesialist|designer|developer|utvikler|"
+    r"scientist|forsker|physicist|phd|prosjekt|project"
+)
+
+
 def _count_keyword_hits(text: str, keywords: list[str]) -> tuple[int, list[str]]:
     hits = [kw for kw in keywords if kw in text]
     return len(hits), hits
@@ -729,6 +746,20 @@ def score_vacancy(
     breakdown["programming_experience_penalty"] = {
         "points": programming_experience_penalty, "matched": requires_programming_experience,
     }
+
+    # Relevance gate (see CONTEXT_GATE_FACTOR). "Relevant" = the active
+    # profile's own track matched; for warehouse NAV's category tag also
+    # counts, unless the title reads as a professional role.
+    if profile == "it":
+        relevant = it_score > 0
+    else:
+        relevant = entry_track_score > 0 or (category_bonus > 0 and not _PROFESSIONAL_TITLE_RE.search(title_l))
+    context_points = sum(
+        max(breakdown[k]["points"], 0)
+        for k in ("location_bonus", "remote_bonus", "language_bonus", "entry_level_bonus")
+    )
+    gate_points = 0 if relevant else -(round(context_points * (1 - CONTEXT_GATE_FACTOR)) + max(category_bonus, 0))
+    breakdown["context_gate"] = {"points": gate_points, "matched": not relevant}
 
     base = 10
     total = base + sum(v["points"] for v in breakdown.values())

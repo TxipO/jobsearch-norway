@@ -737,3 +737,27 @@ def test_bare_sikkerhet_is_not_a_dev_security_keyword():
     assert bd["track_dev_security"]["points"] == 0
     _, bd = _score("Rådgiver", "Ansvar for IT-sikkerhet og cybersikkerhet.", profile="it")
     assert bd["track_dev_security"]["points"] > 0
+
+
+def test_context_bonuses_are_gated_by_profile_relevance():
+    """2026-10-10: "Project Controller, Bergen, remote" (no IT match at all)
+    scored 45 in the IT profile, next to a real "IT Support / Brukerstøtte"
+    at 50. Without a match for the active profile the location/remote/
+    language bonuses are cut to a quarter."""
+    desc = "Fullt remote. Working language is English."
+    irrelevant, bd = _score("Project Controller", desc, municipal="BERGEN", county="VESTLAND", language="en", profile="it")
+    assert bd["context_gate"]["points"] < 0
+    relevant, bd2 = _score("IT Support", desc + " Servicedesk og helpdesk.", municipal="BERGEN", county="VESTLAND",
+                           language="en", profile="it")
+    assert bd2["context_gate"]["points"] == 0
+    assert relevant - irrelevant >= 30
+
+
+def test_nav_category_alone_makes_a_production_job_relevant_but_not_an_engineer():
+    cats = '[{"level1": "Industri og produksjon", "level2": "Produksjon"}]'
+    _, bd = _score("Production Operators", "Join our team.", municipal="OSLO", county="OSLO",
+                   occupation_categories=cats, profile="warehouse")
+    assert bd["context_gate"]["points"] == 0
+    _, bd = _score("Firmware Engineer", "Join our team.", municipal="OSLO", county="OSLO",
+                   occupation_categories=cats, profile="warehouse")
+    assert bd["context_gate"]["points"] < 0
