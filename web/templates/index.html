@@ -233,7 +233,7 @@
       <div class="vacancy-meta">
         <span>{{ v.business_name }}</span>
         <span class="sep">&middot;</span>
-        <span>{{ v.municipal }}{% if v.extent_percent %} &middot; <span class="num">{{ v.extent_percent }}%</span>{% endif %}</span>
+        <span>{{ v.municipal }}{% if v.extent_percent %} &middot; <span class="num">{{ v.extent_percent }}%</span>{% if v.extent_percent and v.extent_percent < 80 %} &middot; <span title="Менше 30 год/тиж (80% ставки): не закриває право на інтропрограму; вага у скорингу не змінюється">&lt;30 год</span>{% endif %}{% endif %}</span>
         {% if v.language %}<span class="sep">&middot;</span><span class="lang-tag">{{ v.language }}</span>{% endif %}
         <span class="sep">&middot;</span>
         <span class="source-tag">{{ v.source }}</span>

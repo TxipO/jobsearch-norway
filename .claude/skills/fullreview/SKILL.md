@@ -446,6 +446,11 @@ For every keyword list and title/body regex in `scoring.py` and
    phrase (the fix shape used for hybrid/remote/hjemmekontor) rather than a
    bare word.
 
+After any change to `scoring.py`, run `python scripts/score_regression.py`
+(snapshot before, compare after): it ranks the vacancies the user acted on in
+the profile they belong to and fails if one leaves the top 5% without being
+listed in `EXPECTED_DROPS`. `/score-review` is the manual LLM look at the top 30.
+
 Also re-check these specific **hardcoded "enumerate everything" lists**,
 which go stale silently as the project grows (same failure shape as an
 expired precondition — true when written, not re-verified since):

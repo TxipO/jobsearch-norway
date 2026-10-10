@@ -47,7 +47,7 @@
   <div class="vacancy-facts">
     {% if v.application_due %}<div><strong>Дедлайн:</strong> <span class="num">{{ v.application_due | format_due | translate_value }}</span></div>{% endif %}
     {% if v.engagement_type %}<div><strong>Тип зайнятості:</strong> {{ v.engagement_type | translate_value }}</div>{% endif %}
-    {% if v.extent %}<div><strong>Обсяг:</strong> {{ v.extent | translate_value }}{% if v.extent_percent %} (<span class="num">{{ v.extent_percent }}%</span>){% endif %}</div>{% endif %}
+    {% if v.extent %}<div><strong>Обсяг:</strong> {{ v.extent | translate_value }}{% if v.extent_percent %} (<span class="num">{{ v.extent_percent }}%</span>){% endif %}{% if v.extent_percent and v.extent_percent < 80 %} <span title="Менше 30 год/тиж (80% ставки): не закриває право на інтропрограму; вага у скорингу не змінюється">&lt;30 год</span>{% endif %}</div>{% endif %}
     {% if v.sector %}<div><strong>Сектор:</strong> {{ v.sector | translate_value }}</div>{% endif %}
     {% if v.salary_text %}<div><strong>Зарплата:</strong> <span class="salary-tag num">{{ v.salary_text }}</span></div>{% endif %}
     {% if auto_ignore_date %}
