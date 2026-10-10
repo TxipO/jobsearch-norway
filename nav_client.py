@@ -45,6 +45,19 @@ MAX_DETAIL_HOLDS = 3
 DETAIL_TIMEOUT = (10, 60)  # (connect, read) seconds
 BREAKER_FAILURES = 5
 
+# Same slowness hits the calls that are NOT per-ad, and those fail the whole
+# NAV source ("не синхронізувався") instead of one ad: measured 2026-10-10 the
+# public-token request took 22-30 s (one 500) and a feed page — up to 1000
+# entries — 21-26 s (one 500), both against a 30 s read timeout. Page/token
+# GETs are idempotent, so one retry on timeout/5xx is safe.
+REQUEST_TIMEOUT = (10, 60)
+REQUEST_ATTEMPTS = 2
+
+# The public experimentation token is cached in feed_state and reused until
+# NAV answers 401/403 — fetching it cost ~30 s on every sync and was itself
+# the call that timed out. Ignored when NAV_FEED_TOKEN is set.
+TOKEN_KEY = "nav_public_token"
+
 
 def get_token() -> str:
     token = os.environ.get("NAV_FEED_TOKEN")
@@ -55,9 +68,25 @@ def get_token() -> str:
         "(https://pam-stilling-feed.nav.no/api/publicToken). This token rotates "
         "irregularly and should not be relied on long-term."
     )
-    resp = requests.get(f"{BASE_URL}/api/publicToken", timeout=30)
-    resp.raise_for_status()
+    resp = _get_with_retry(f"{BASE_URL}/api/publicToken")
     return resp.text.strip().splitlines()[-1].strip()
+
+
+def _get_with_retry(url: str, headers: dict | None = None) -> requests.Response:
+    """GET with REQUEST_TIMEOUT; a timeout, connection error or 5xx is tried
+    once more, then raised as before (raise_for_status on the last answer)."""
+    for attempt in range(REQUEST_ATTEMPTS):
+        last = attempt == REQUEST_ATTEMPTS - 1
+        try:
+            resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+        except (requests.Timeout, requests.ConnectionError):
+            if last:
+                raise
+            continue
+        if resp.status_code >= 500 and not last:
+            continue
+        resp.raise_for_status()
+        return resp
 
 
 def _headers(token: str) -> dict:
@@ -95,9 +124,10 @@ def _is_permanent_detail_error(exc: requests.RequestException) -> bool:
     """A 4xx on the detail endpoint (404/410: ad withdrawn between the feed
     listing and the fetch) will never succeed on retry — treating it as
     transient would pin the cursor on that page forever (2026-10-05). 408/429
-    are the 4xx that DO clear up on their own, so they stay transient."""
+    are the 4xx that DO clear up on their own, so they stay transient (as do 401/403)."""
     status = getattr(getattr(exc, "response", None), "status_code", None)
-    return status is not None and 400 <= status < 500 and status not in (408, 429)
+    # 401/403: an expired/rotated token says nothing about the ad itself.
+    return status is not None and 400 <= status < 500 and status not in (401, 403, 408, 429)
 
 
 def _load_failures(conn: sqlite3.Connection) -> dict[str, int]:
@@ -115,7 +145,10 @@ def _save_failures(conn: sqlite3.Connection, failures: dict[str, int]) -> None:
 
 
 def sync(conn: sqlite3.Connection) -> dict:
-    token = get_token()
+    cached = not os.environ.get("NAV_FEED_TOKEN") and get_state(conn, TOKEN_KEY)
+    token = cached or get_token()
+    if not cached and not os.environ.get("NAV_FEED_TOKEN"):
+        set_state(conn, TOKEN_KEY, token)
     cursor_id = get_state(conn, CURSOR_KEY)
     failures = _load_failures(conn)
 
@@ -127,10 +160,22 @@ def sync(conn: sqlite3.Connection) -> dict:
     stats = {"pages": 0, "new": 0, "updated": 0, "unchanged": 0, "marked_inactive": 0,
              "detail_missing": 0, "detail_errors": 0}
 
+    def fetch_feed(url: str) -> dict:
+        """Feed page GET; a cached token that NAV no longer accepts is replaced
+        once. Always runs before any detail fetch, so a stale token can never
+        reach the per-ad calls."""
+        nonlocal token, cached
+        try:
+            return _get_with_retry(url, _headers(token)).json()
+        except requests.HTTPError as e:
+            if not cached or getattr(e.response, "status_code", None) not in (401, 403):
+                raise
+            token, cached = get_token(), False
+            set_state(conn, TOKEN_KEY, token)
+            return _get_with_retry(url, _headers(token)).json()
+
     if not cursor_id:
-        resp = requests.get(f"{BASE_URL}/api/v1/feed?last", headers=_headers(token), timeout=30)
-        resp.raise_for_status()
-        page = resp.json()
+        page = fetch_feed(f"{BASE_URL}/api/v1/feed?last")
         set_state(conn, CURSOR_KEY, page["id"])
         logger.info(f"Bootstrapped cursor at tip page {page['id']} (no history replayed).")
         return stats
@@ -143,9 +188,7 @@ def sync(conn: sqlite3.Connection) -> dict:
     # work is bounded by real publishing volume.
     url = f"{BASE_URL}/api/v1/feed/{cursor_id}"
     while True:
-        resp = requests.get(url, headers=_headers(token), timeout=30)
-        resp.raise_for_status()
-        page = resp.json()
+        page = fetch_feed(url)
         stats["pages"] += 1
 
         # One entry per uuid, last occurrence on the page wins. The same

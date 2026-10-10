@@ -19,6 +19,7 @@ There were no nav_client tests at all before this, which is why it survived
 days of daily use.
 """
 
+import json
 import time
 import db
 import nav_client
@@ -460,3 +461,89 @@ def test_single_broken_ad_still_gives_up_when_the_service_answers(tmp_path, monk
         assert stats["detail_errors"] == 1 and "nav_degraded" not in stats, n
     stats = nav_client.sync(conn)
     assert stats["detail_missing"] == 1 and "nav_degraded" not in stats
+
+
+def _real_resp(status, payload=None):
+    resp = nav_client.requests.Response()
+    resp.status_code = status
+    resp._content = json.dumps(payload or {}).encode()
+    return resp
+
+
+def _feed_server(monkeypatch, behaviours):
+    """`behaviours`: list of callables consumed in order by feed-page requests
+    (publicToken and feedentry get their own fixed answers). Returns the log."""
+    log = []
+
+    def fake_get(url, headers=None, timeout=None):
+        log.append((url.rsplit("/", 1)[-1], (headers or {}).get("Authorization")))
+        if url.endswith("/api/publicToken"):
+            return _TokenResp()
+        if "/feedentry/" in url:
+            return _real_resp(200, {"ad_content": {"title": "Ad", "description": "d"}})
+        return behaviours.pop(0)()
+
+    monkeypatch.setattr(nav_client.requests, "get", fake_get)
+    monkeypatch.delenv("NAV_FEED_TOKEN", raising=False)
+    return log
+
+
+class _TokenResp:
+    status_code = 200
+    text = "header\nfresh-token\n"
+
+    def raise_for_status(self):
+        pass
+
+
+def _page(items=()):
+    return lambda: _real_resp(200, {"id": "p1", "items": list(items), "next_id": None})
+
+
+def test_feed_page_is_retried_once_after_a_timeout(tmp_path, monkeypatch):
+    """2026-10-10: a 1000-entry page took 21-26 s against a 30 s timeout and a
+    single timeout failed the whole NAV source for the sync."""
+    def timeout():
+        raise nav_client.requests.ReadTimeout("slow")
+
+    log = _feed_server(monkeypatch, [timeout, _page([_entry("a")])])
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+    db.set_state(conn, nav_client.TOKEN_KEY, "cached-token")
+
+    stats = nav_client.sync(conn)
+
+    assert stats["pages"] == 1 and stats["new"] == 1
+    assert sum(1 for u, _ in log if u == "p1") == 2
+
+
+def test_public_token_is_cached_between_syncs(tmp_path, monkeypatch):
+    log = _feed_server(monkeypatch, [_page(), _page()])
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    nav_client.sync(conn)
+    nav_client.sync(conn)
+
+    assert sum(1 for u, _ in log if u == "publicToken") == 1
+    assert db.get_state(conn, nav_client.TOKEN_KEY) == "fresh-token"
+
+
+def test_rejected_cached_token_is_replaced_once_before_any_detail_fetch(tmp_path, monkeypatch):
+    class _Unauth:
+        status_code = 401
+
+        def raise_for_status(self):
+            raise nav_client.requests.HTTPError("401", response=_real_resp(401))
+
+    log = _feed_server(monkeypatch, [lambda: _Unauth(), _page([_entry("a")])])
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+    db.set_state(conn, nav_client.TOKEN_KEY, "expired-token")
+
+    stats = nav_client.sync(conn)
+
+    assert stats["new"] == 1
+    assert db.get_state(conn, nav_client.TOKEN_KEY) == "fresh-token"
+    detail_auth = [a for u, a in log if u == "a"]
+    assert detail_auth == ["Bearer fresh-token"], "no detail fetch may use the rejected token"
