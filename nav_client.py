@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 
 import requests
 
@@ -58,6 +59,15 @@ REQUEST_ATTEMPTS = 2
 # the call that timed out. Ignored when NAV_FEED_TOKEN is set.
 TOKEN_KEY = "nav_public_token"
 
+# Ads of the cursor page whose detail was already handled, {"page": id,
+# "done": {uuid: feed-entry sistEndret}}. A held page used to be re-fetched
+# from its first ad on every sync, so with NAV slow the same already-imported
+# ads ate each sync's budget and the not-yet-fetched ones never got a turn
+# (2026-10-10 -> 10-12: 93 of 401 active ads on one 738-entry page stayed
+# missing for two days). An ad is skipped only while its feed entry's
+# sistEndret is unchanged; the record is dropped when the cursor moves on.
+PROGRESS_KEY = "nav_page_progress"
+
 
 def get_token() -> str:
     token = os.environ.get("NAV_FEED_TOKEN")
@@ -93,24 +103,65 @@ def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _fetch_ad_detail(token: str, uuid: str) -> dict | None:
-    resp = requests.get(
-        f"{BASE_URL}/api/v1/feedentry/{uuid}", headers=_headers(token), timeout=DETAIL_TIMEOUT
-    )
-    resp.raise_for_status()
+class _Token:
+    """The bearer token, shared by the detail-fetch worker threads. NAV's
+    public token rotates and an older one stays valid on only SOME backends:
+    2026-10-12 a token cached two days earlier was accepted for the feed page
+    and answered 401 for ~25% of the detail requests, every sync, and those
+    ads were then counted toward "given up". On 401/403 the token is replaced
+    once (under a lock, so N threads cause one request) and the call retried."""
+
+    def __init__(self, value: str):
+        self.value = value
+        self.refreshed = False
+        self._lock = threading.Lock()
+
+    def refresh(self, stale: str) -> str:
+        with self._lock:
+            if self.value == stale:
+                self.value = get_token()
+                self.refreshed = True
+            return self.value
+
+
+def _get_authed(url: str, token: _Token) -> requests.Response:
+    stale = token.value
+    try:
+        return _get_with_retry(url, _headers(stale))
+    except requests.HTTPError as e:
+        if getattr(e.response, "status_code", None) not in (401, 403):
+            raise
+        return _get_with_retry(url, _headers(token.refresh(stale)))
+
+
+def _fetch_ad_detail(token: _Token, uuid: str) -> dict | None:
+    stale = token.value
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/api/v1/feedentry/{uuid}", headers=_headers(stale), timeout=DETAIL_TIMEOUT
+        )
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        if getattr(e.response, "status_code", None) not in (401, 403):
+            raise
+        resp = requests.get(
+            f"{BASE_URL}/api/v1/feedentry/{uuid}", headers=_headers(token.refresh(stale)),
+            timeout=DETAIL_TIMEOUT,
+        )
+        resp.raise_for_status()
     return resp.json().get("ad_content")
 
 
-def _service_answers(conn: sqlite3.Connection, token: str) -> bool:
+def _service_answers(conn: sqlite3.Connection, token: _Token, default: bool = True) -> bool:
     """Probe with an ad we already hold, to tell "the NAV feed is down/slow"
     from "this one ad is broken" when a whole page failed with no success to
     compare against. A 4xx still counts as an answer. No stored ad to probe
-    with -> assume healthy (the per-ad cap then behaves as it always did)."""
+    with (fresh database) -> `default`."""
     row = conn.execute(
         "SELECT uuid FROM vacancies WHERE source = 'nav' ORDER BY first_seen_at DESC LIMIT 1"
     ).fetchone()
     if row is None:
-        return True
+        return default
     try:
         _fetch_ad_detail(token, row[0])
     except requests.RequestException as e:
@@ -144,11 +195,27 @@ def _save_failures(conn: sqlite3.Connection, failures: dict[str, int]) -> None:
     set_state(conn, FAILURES_KEY, json.dumps(failures, sort_keys=True))
 
 
+def _persist_token(conn: sqlite3.Connection, token: _Token, use_cache: bool) -> None:
+    if use_cache and token.refreshed:
+        set_state(conn, TOKEN_KEY, token.value)
+
+
+def _load_progress(conn: sqlite3.Connection, page_id: str | None) -> dict[str, str]:
+    try:
+        data = json.loads(get_state(conn, PROGRESS_KEY) or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(data, dict) or data.get("page") != page_id or not isinstance(data.get("done"), dict):
+        return {}
+    return {k: v for k, v in data["done"].items() if isinstance(k, str) and isinstance(v, str)}
+
+
 def sync(conn: sqlite3.Connection) -> dict:
-    cached = not os.environ.get("NAV_FEED_TOKEN") and get_state(conn, TOKEN_KEY)
-    token = cached or get_token()
-    if not cached and not os.environ.get("NAV_FEED_TOKEN"):
-        set_state(conn, TOKEN_KEY, token)
+    use_cache = not os.environ.get("NAV_FEED_TOKEN")
+    cached = get_state(conn, TOKEN_KEY) if use_cache else None
+    token = _Token(cached or get_token())
+    if use_cache and not cached:
+        set_state(conn, TOKEN_KEY, token.value)
     cursor_id = get_state(conn, CURSOR_KEY)
     failures = _load_failures(conn)
 
@@ -161,23 +228,13 @@ def sync(conn: sqlite3.Connection) -> dict:
              "detail_missing": 0, "detail_errors": 0}
 
     def fetch_feed(url: str) -> dict:
-        """Feed page GET; a cached token that NAV no longer accepts is replaced
-        once. Always runs before any detail fetch, so a stale token can never
-        reach the per-ad calls."""
-        nonlocal token, cached
-        try:
-            return _get_with_retry(url, _headers(token)).json()
-        except requests.HTTPError as e:
-            if not cached or getattr(e.response, "status_code", None) not in (401, 403):
-                raise
-            token, cached = get_token(), False
-            set_state(conn, TOKEN_KEY, token)
-            return _get_with_retry(url, _headers(token)).json()
+        return _get_authed(url, token).json()
 
     if not cursor_id:
         page = fetch_feed(f"{BASE_URL}/api/v1/feed?last")
         set_state(conn, CURSOR_KEY, page["id"])
         logger.info(f"Bootstrapped cursor at tip page {page['id']} (no history replayed).")
+        _persist_token(conn, token, use_cache)
         return stats
 
     # Always read the page the cursor points at — no conditional request. See
@@ -219,15 +276,21 @@ def sync(conn: sqlite3.Connection) -> dict:
         # (I/O-bound, not CPU-bound) instead of one at a time, which made a
         # multi-hundred-item catch-up sync take minutes. DB writes stay on this
         # thread; worker threads only ever touch the network, never `conn`.
+        done = _load_progress(conn, page.get("id"))
+        done_before = dict(done)
+        todo = [u for u in active_uuids
+                if not (latest[u].get("sistEndret") and done.get(u) == latest[u]["sistEndret"])]
+        if len(todo) != len(active_uuids):
+            stats["skipped"] = stats.get("skipped", 0) + len(active_uuids) - len(todo)
         page_detail_errors = 0
         failures_before = dict(failures)
         transient: list[str] = []  # uuids whose detail failed transiently on this page
         successes = 0
         in_a_row = 0
         tripped = False
-        if active_uuids:
+        if todo:
             with concurrent.futures.ThreadPoolExecutor(max_workers=DETAIL_FETCH_WORKERS) as pool:
-                future_to_uuid = {pool.submit(_fetch_ad_detail, token, u): u for u in active_uuids}
+                future_to_uuid = {pool.submit(_fetch_ad_detail, token, u): u for u in todo}
                 for future in concurrent.futures.as_completed(future_to_uuid):
                     uuid = future_to_uuid[future]
                     try:
@@ -238,6 +301,7 @@ def sync(conn: sqlite3.Connection) -> dict:
                         logger.debug(f"Detail fetch failed for {uuid} ({e})")
                         if _is_permanent_detail_error(e):
                             stats["detail_missing"] += 1
+                            done[uuid] = latest[uuid].get("sistEndret") or ""
                             continue
                         transient.append(uuid)
                         in_a_row += 1
@@ -249,6 +313,7 @@ def sync(conn: sqlite3.Connection) -> dict:
                     in_a_row = 0
                     successes += 1
                     failures.pop(uuid, None)
+                    done[uuid] = latest[uuid].get("sistEndret") or ""
                     if ad is None:
                         # No content is a stable answer, not a transient
                         # failure: skip it, retrying would never change it.
@@ -271,12 +336,13 @@ def sync(conn: sqlite3.Connection) -> dict:
                         stats["updated"] += 1
 
         if transient:
-            # Outage vs one broken ad: a breaker trip is an outage by
-            # definition; a page with no success at all is checked with a probe.
-            # During an outage nothing is charged to the ads — only a failure
-            # next to successes (or with the service answering) counts toward
-            # MAX_DETAIL_HOLDS.
-            if tripped or (successes == 0 and not _service_answers(conn, token)):
+            # Outage vs broken ads: a breaker trip or a page with no success at
+            # all is checked with a probe (an ad we already hold). Probe fails
+            # -> outage, nothing is charged to the ads. Probe answers -> the ads
+            # themselves are the problem and count toward MAX_DETAIL_HOLDS (a
+            # breaker trip alone used to be treated as an outage forever, which
+            # would pin the cursor on >= 5 permanently failing ads).
+            if (tripped or successes == 0) and not _service_answers(conn, token, default=not tripped):
                 stats["nav_degraded"] = True
                 page_detail_errors = len(transient)
             else:
@@ -293,6 +359,8 @@ def sync(conn: sqlite3.Connection) -> dict:
 
         if failures != failures_before:
             _save_failures(conn, failures)
+        if done != done_before:
+            set_state(conn, PROGRESS_KEY, json.dumps({"page": page.get("id"), "done": done}))
 
         if page_detail_errors:
             # A transient detail failure used to only bump detail_missing, and
@@ -323,6 +391,8 @@ def sync(conn: sqlite3.Connection) -> dict:
         # strand the whole feed for two days (2026-08-31 → 09-02, 12 pages /
         # 10 375 entries queued up while every sync reported "+0 new").
         set_state(conn, CURSOR_KEY, next_id)
+        if done:
+            set_state(conn, PROGRESS_KEY, "{}")
         # Pruned once the page is passed (given-up uuids included) so the
         # counter dict can't grow without bound.
         if any(u in failures for u in active_uuids):
@@ -331,4 +401,5 @@ def sync(conn: sqlite3.Connection) -> dict:
             _save_failures(conn, failures)
         url = f"{BASE_URL}/api/v1/feed/{next_id}"
 
+    _persist_token(conn, token, use_cache)
     return stats

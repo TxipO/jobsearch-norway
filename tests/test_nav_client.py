@@ -547,3 +547,127 @@ def test_rejected_cached_token_is_replaced_once_before_any_detail_fetch(tmp_path
     assert db.get_state(conn, nav_client.TOKEN_KEY) == "fresh-token"
     detail_auth = [a for u, a in log if u == "a"]
     assert detail_auth == ["Bearer fresh-token"], "no detail fetch may use the rejected token"
+
+
+def _stamped(uuid, stamp="2026-10-09T12:00:00+02:00"):
+    e = _entry(uuid)
+    e["_feed_entry"]["sistEndret"] = stamp
+    return e
+
+
+def test_held_page_does_not_refetch_ads_that_were_already_handled(tmp_path, monkeypatch):
+    """2026-10-10 -> 10-12: a 738-entry page was re-fetched from its first ad
+    every sync, so with a slow NAV the never-fetched ads at the end of the
+    page never got a turn and nothing new arrived for two days."""
+    calls = []
+    failing = {"c"}
+    pages = {"p1": {"items": [_stamped("a"), _stamped("b"), _stamped("c")], "next_id": "p2"},
+             "p2": {"items": [], "etag": "tip"}}
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/feedentry/" in url:
+            uuid = url.rsplit("/", 1)[-1]
+            calls.append(uuid)
+            if uuid in failing:
+                raise nav_client.requests.ConnectionError("boom")
+            return _Resp(200, {"ad_content": {"title": "Ad " + uuid, "description": "d"}})
+        page_id = url.rsplit("/", 1)[-1]
+        return _Resp(200, {"id": page_id, "items": pages[page_id]["items"],
+                           "next_id": pages[page_id].get("next_id")})
+
+    monkeypatch.setattr(nav_client.requests, "get", fake_get)
+    monkeypatch.setattr(nav_client, "get_token", lambda: "tok")
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    nav_client.sync(conn)
+    assert sorted(calls) == ["a", "b", "c", "c"][:3] or sorted(set(calls)) == ["a", "b", "c"]
+    calls.clear()
+    failing.clear()
+    stats = nav_client.sync(conn)
+
+    assert "a" not in calls and "b" not in calls, "already-handled ads must not be fetched again"
+    assert calls.count("c") == 1
+    assert stats["skipped"] == 2
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+    assert db.get_state(conn, nav_client.PROGRESS_KEY) == "{}"
+
+
+def test_changed_sist_endret_is_fetched_again(tmp_path, monkeypatch):
+    calls = []
+    pages = {"p1": {"items": [_stamped("a")], "next_id": None}}
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/feedentry/" in url:
+            calls.append(url.rsplit("/", 1)[-1])
+            return _Resp(200, {"ad_content": {"title": "Ad", "description": "d"}})
+        return _Resp(200, {"id": "p1", "items": pages["p1"]["items"], "next_id": None})
+
+    monkeypatch.setattr(nav_client.requests, "get", fake_get)
+    monkeypatch.setattr(nav_client, "get_token", lambda: "tok")
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    nav_client.sync(conn)
+    nav_client.sync(conn)
+    assert calls == ["a"], "same sistEndret: second sync must skip"
+    pages["p1"]["items"] = [_stamped("a", "2026-10-12T09:00:00+02:00")]
+    nav_client.sync(conn)
+    assert calls == ["a", "a"]
+
+
+def test_many_permanently_failing_ads_are_still_given_up_when_the_service_answers(tmp_path, monkeypatch):
+    """The breaker trips on >= 5 failures in a row; that alone must not be
+    read as an outage, or >= 5 broken ads would pin the cursor forever. The
+    probe (an ad we already hold) tells the two apart."""
+    bad = {f"x{i}" for i in range(6)}
+    pages = {"p0": {"items": [_entry("seed")], "next_id": "p1"},
+             "p1": {"items": [_entry(u) for u in sorted(bad)], "next_id": "p2"},
+             "p2": {"items": [], "etag": "tip"}}
+    _install_flaky_feed(monkeypatch, pages, bad, lambda: nav_client.requests.ConnectionError("boom"))
+    monkeypatch.setattr(nav_client, "DETAIL_FETCH_WORKERS", 1)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p0")
+
+    for _ in range(12):
+        nav_client.sync(conn)
+        if db.get_state(conn, nav_client.CURSOR_KEY) == "p2":
+            break
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2", "cursor must eventually move past broken ads"
+
+
+def test_detail_401_with_a_stale_token_refreshes_once_and_retries(tmp_path, monkeypatch):
+    """2026-10-12: a token cached for two days was accepted for the feed page
+    but answered 401 for ~25% of detail requests on every sync; those ads were
+    counted toward 'given up'. One refresh (not one per thread) fixes it."""
+    token_calls = []
+    pages = {"p1": {"items": [_stamped(f"a{i}") for i in range(12)], "next_id": None}}
+
+    def fake_get(url, headers=None, timeout=None):
+        auth = (headers or {}).get("Authorization")
+        if url.endswith("/api/publicToken"):
+            token_calls.append(1)
+            return _TokenResp()
+        if "/feedentry/" in url:
+            if auth != "Bearer fresh-token":
+                return _Unauth401()
+            return _real_resp(200, {"ad_content": {"title": "Ad", "description": "d"}})
+        return _real_resp(200, {"id": "p1", "items": pages["p1"]["items"], "next_id": None})
+
+    class _Unauth401:
+        status_code = 401
+
+        def raise_for_status(self):
+            raise nav_client.requests.HTTPError("401", response=_real_resp(401))
+
+    monkeypatch.setattr(nav_client.requests, "get", fake_get)
+    monkeypatch.delenv("NAV_FEED_TOKEN", raising=False)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+    db.set_state(conn, nav_client.TOKEN_KEY, "stale-token")
+
+    stats = nav_client.sync(conn)
+
+    assert stats["new"] == 12 and stats["detail_errors"] == 0
+    assert len(token_calls) == 1, "all threads share one token refresh"
+    assert db.get_state(conn, nav_client.TOKEN_KEY) == "fresh-token"
