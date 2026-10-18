@@ -64,6 +64,13 @@ IT_TARGET_TITLE_KEYWORDS = [
     "it-tekniker", "it tekniker", "ikt-tekniker",
     "it-driftstekniker", "it-drift", "ikt-drift",
 ]
+# Anchored at a word start: the plain substring test also matched "Kredit
+# medarbeider" / "Audit medarbeider" ("it medarbeider" inside the word). No live
+# title was affected (4 active titles match, 0 with a letter before the match),
+# so this is hardening, checked 2026-10-18.
+IT_TARGET_TITLE_RE = re.compile(
+    "(?<![a-zæøåäö])(?:" + "|".join(re.escape(kw) for kw in IT_TARGET_TITLE_KEYWORDS) + ")"
+)
 
 # --- Track B: general entry-level (production / warehouse / logistics) -----
 # Retargeted 2026-08-18 — user explicitly rejected retail/shop-assistant and
@@ -673,6 +680,11 @@ def score_vacancy(
     # (Electricians ×2, Industrial Maintenance Mechanic, Sheet Metal
     # Workers, Hardware Test Engineer, power systems, a camper-rental
     # manager). Two of them were user-flagged the same day.
+    # A target title (IT_TARGET_TITLE_KEYWORDS) is itself a real IT signal, so it
+    # switches both gates below off: an "IT-tekniker" ad that mentions
+    # "1. linje" or "feilsøking" keeps those hits like any other IT ad.
+    target_match = IT_TARGET_TITLE_RE.search(title_l)
+    target_title = target_match.group(0) if target_match else None
     # Support-line words ("førstelinje", "1. linje", "andrelinje"...) also mean
     # "first line" of child welfare, vets, law firms, call centres. Measured
     # 2026-10-18: 65 visible ads contain one, 54 of them as the ONLY IT match
@@ -682,13 +694,14 @@ def score_vacancy(
     # 365" reached the relevance bar. They now count only with a real support
     # keyword next to them (or when the position's own title carries one).
     if (
-        any(kw in LINE_LEVEL_KEYWORDS for kw in it_kw)
+        not target_title
+        and any(kw in LINE_LEVEL_KEYWORDS for kw in it_kw)
         and not any(kw in title_l for kw in it_kw if kw in LINE_LEVEL_KEYWORDS)
         and all(kw in LINE_LEVEL_KEYWORDS or kw in IT_WEAK_CONTEXT_KEYWORDS for kw in it_kw)
     ):
         it_kw = [kw for kw in it_kw if kw not in LINE_LEVEL_KEYWORDS]
         it_hits = len(it_kw)
-    if it_kw in (["feilsøking"], ["troubleshooting"], ["feilsøking", "troubleshooting"]):
+    if not target_title and it_kw in (["feilsøking"], ["troubleshooting"], ["feilsøking", "troubleshooting"]):
         it_hits, it_kw = 0, []
     # 2026-10-10: the IT-support and dev tracks are zeroed in the "warehouse"
     # profile (matched keywords stay in the breakdown), mirroring how the
@@ -702,7 +715,6 @@ def score_vacancy(
     it_title_hits = sum(1 for kw in it_kw if kw in title_l)
     # A target title counts as one keyword in the title (i.e. double, like the
     # rest), once — "IT-driftstekniker" also contains "it-drift".
-    target_title = next((kw for kw in IT_TARGET_TITLE_KEYWORDS if kw in title_l), None)
     if target_title:
         it_title_hits += 2
         it_kw = it_kw + [target_title]
