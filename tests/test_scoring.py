@@ -829,6 +829,12 @@ def test_management_title_rule_leaves_coordinators_and_lookalikes_alone():
         assert not bd["senior_penalty"]["matched"]["senior_title"], title
 
 
+def test_ikt_konsulent_counts_as_it_support_keyword():
+    _, bd = _score("IKT-konsulent innan drift", "Vi søker.", profile="it")
+    assert "ikt-konsulent" in bd["track_it_support"]["matched"]
+    assert bd["track_it_support"]["points"] == 16, "title hit counts double"
+
+
 def test_title_keyword_counts_double_for_it_track():
     _, in_body = _score("Konsulent", "Du jobber med servicedesk.", profile="it")
     _, in_title = _score("Servicedesk konsulent", "Du jobber.", profile="it")

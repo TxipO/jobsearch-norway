@@ -22,6 +22,10 @@ from hard_blocks import REQUIREMENT_VERB_RE, has_optional_marker, iter_requireme
 IT_SUPPORT_KEYWORDS = [
     "it-support", "it support", "brukerstøtte", "servicedesk", "service desk",
     "helpdesk", "help desk", "supportkonsulent", "it-konsulent",
+    # "ikt-konsulent" added 2026-10-18: 3 visible titles, all real IT roles
+    # ("ID 2487 IKT-konsulent innan drift, informasjonssikkerheit og beredskap"
+    # scored only 33). "ikt konsulent" matches nothing live, so not added.
+    "ikt-konsulent",
     "1. linje", "1.linje", "førstelinje", "2. linje", "2.linje", "andrelinje",
     "3. linje", "3.linje", "tredjelinje",
     "feilsøking", "troubleshooting", "on-site support",
