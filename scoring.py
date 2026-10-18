@@ -38,6 +38,20 @@ IT_SUPPORT_KEYWORDS = [
     "supportspesialist", "supportmedarbeider",
 ]
 
+# The user's target role family (2026-10-18: hybrid support + drift in a small
+# organisation), TITLE-ONLY. Measured on the live corpus: LinkedIn rows have no
+# description, so "IT-tekniker" (Bergen) and "IT-driftstekniker – server,
+# nettverk og IT-infrastruktur" scored 12 with zero IT match. In the BODY these
+# words are noise ("jobbe sammen med ikt-tekniker" in a lærling ad,
+# "systemadministrator eller superbruker" in an HR-system ad), and bare
+# "driftstekniker" is facilities work in 19 of 20 active titles (electro,
+# buildings, medical gas, warehouse) — only the IT- compound is kept.
+IT_TARGET_TITLE_KEYWORDS = [
+    "it-medarbeider", "it medarbeider", "ikt-medarbeider", "ikt medarbeider",
+    "it-tekniker", "it tekniker", "ikt-tekniker",
+    "it-driftstekniker", "it-drift", "ikt-drift",
+]
+
 # --- Track B: general entry-level (production / warehouse / logistics) -----
 # Retargeted 2026-08-18 — user explicitly rejected retail/shop-assistant and
 # restaurant/hotel work ("вакансії продавця теж нахуй, я не буду"; їдальні/
@@ -628,6 +642,12 @@ def score_vacancy(
     # the title, while the same words in the body are often just the tools
     # list or employer copy. Same cap as before.
     it_title_hits = sum(1 for kw in it_kw if kw in title_l)
+    # A target title counts as one keyword in the title (i.e. double, like the
+    # rest), once — "IT-driftstekniker" also contains "it-drift".
+    target_title = next((kw for kw in IT_TARGET_TITLE_KEYWORDS if kw in title_l), None)
+    if target_title:
+        it_title_hits += 2
+        it_kw = it_kw + [target_title]
     it_score = min((it_hits + it_title_hits) * 8, 40) if profile == "it" else 0
     breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}
     nav_it_ops = _has_nav_it_operations_tag(occupation_categories)

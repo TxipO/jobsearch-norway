@@ -779,3 +779,20 @@ def test_title_keyword_counts_double_for_it_track():
     _, in_body = _score("Konsulent", "Du jobber med servicedesk.", profile="it")
     _, in_title = _score("Servicedesk konsulent", "Du jobber.", profile="it")
     assert in_title["track_it_support"]["points"] == 2 * in_body["track_it_support"]["points"]
+
+
+def test_target_it_titles_score_without_a_description():
+    """LinkedIn rows carry no description: "IT-tekniker" (Bergen) scored 12
+    with zero IT match although it is exactly the user's target role."""
+    _, bd = _score("IT-tekniker", None, profile="it")
+    assert bd["track_it_support"]["points"] == 16 and "it-tekniker" in bd["track_it_support"]["matched"]
+    assert bd["context_gate"]["points"] == 0, "a target title alone makes the vacancy relevant"
+    _, bd = _score("IT-driftstekniker – server, nettverk og IT-infrastruktur", None, profile="it")
+    assert bd["track_it_support"]["points"] == 16, "counted once, not as it-drift + it-driftstekniker"
+
+
+def test_bare_driftstekniker_and_body_mentions_are_not_target_titles():
+    _, bd = _score("Driftstekniker - Logistikk og lager", "Drift av bygg.", profile="it")
+    assert bd["track_it_support"]["points"] == 0
+    _, bd = _score("Lærling", "Du vil jobbe i team sammen med ikt-tekniker.", profile="it")
+    assert bd["track_it_support"]["points"] == 0
