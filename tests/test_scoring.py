@@ -897,6 +897,19 @@ def test_target_title_must_start_at_a_word_and_keeps_gated_keywords():
     assert set(bd["track_it_support"]["matched"]) == {"1. linje", "feilsøking", "it-tekniker"}
 
 
+def test_bare_ikt_in_title_counts_once_and_never_in_the_body():
+    _, bd = _score("Rådgiver IKT Valdres", None, profile="it")
+    assert bd["track_it_support"]["points"] == 16 and bd["context_gate"]["points"] == 0
+    _, kons = _score("IKT-konsulent", None, profile="it")
+    assert kons["track_it_support"]["points"] == 16, "ikt-konsulent keyword and bare ikt must not stack"
+    _, bd = _score("Rådgiver", "Du har god IKT-kompetanse og kan bruke IKT-systemer.", profile="it")
+    assert bd["track_it_support"]["points"] == 0
+    _, bd = _score("Piktogram designer", None, profile="it")
+    assert bd["track_it_support"]["points"] == 0, "ikt inside a word is not the abbreviation"
+    _, bd = _score("Head of IKT", None, profile="it")
+    assert bd["senior_penalty"]["matched"]["senior_title"], "management titles keep their penalty"
+
+
 def test_bare_driftstekniker_and_body_mentions_are_not_target_titles():
     _, bd = _score("Driftstekniker - Logistikk og lager", "Drift av bygg.", profile="it")
     assert bd["track_it_support"]["points"] == 0

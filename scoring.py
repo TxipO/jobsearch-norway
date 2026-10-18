@@ -68,6 +68,7 @@ IT_TARGET_TITLE_KEYWORDS = [
 # medarbeider" / "Audit medarbeider" ("it medarbeider" inside the word). No live
 # title was affected (4 active titles match, 0 with a letter before the match),
 # so this is hardening, checked 2026-10-18.
+IKT_TITLE_RE = re.compile(r"(?<![a-zæøåäö])ikt(?![a-zæøåäö])")
 IT_TARGET_TITLE_RE = re.compile(
     "(?<![a-zæøåäö])(?:" + "|".join(re.escape(kw) for kw in IT_TARGET_TITLE_KEYWORDS) + ")"
 )
@@ -715,6 +716,15 @@ def score_vacancy(
     it_title_hits = sum(1 for kw in it_kw if kw in title_l)
     # A target title counts as one keyword in the title (i.e. double, like the
     # rest), once — "IT-driftstekniker" also contains "it-drift".
+    # Bare "ikt" as a whole word in the TITLE ("Rådgiver IKT Valdres", "Bli IKT-
+    # rådgiver hos Agder politidistrikt", "Systemansvarleg – IKT og helsedata")
+    # counts as a target title too, but only when no IT keyword already sits in
+    # the title ("IKT-konsulent" must not count twice). Measured 2026-10-18: 12
+    # visible titles, all IT roles; in the BODY it is boilerplate ("god IKT-
+    # kompetanse", "IKT-systemer" in teacher, nurse and cleaner ads - 216 of
+    # 243 body-only matches had no other IT keyword), so title-only.
+    if not target_title and not it_title_hits and IKT_TITLE_RE.search(title_l):
+        target_title = "ikt"
     if target_title:
         it_title_hits += 2
         it_kw = it_kw + [target_title]
