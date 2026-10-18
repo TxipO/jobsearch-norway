@@ -296,6 +296,15 @@ REMOTE_KEYWORDS = [
 CAR_REQUIRED_KEYWORDS = [
     "egen bil", "førerkort", "eget kjøretøy", "driver's license",
     "driving licence", "must have a car",
+    # Spelling variants added 2026-10-18. Measured on the live corpus: with the
+    # forms above, 9 visible ads naming a licence as a requirement took no
+    # penalty - Oda "Full-time/Part-Time Driver Lier/Alnabru" ("A valid driving
+    # license (Class B)", 45 in the warehouse top 30), "Facility Manager"
+    # ("driver's licence", US/UK mix), "Head Baker" (curly apostrophe). All
+    # checked by eye as real requirements. "class b" alone adds nothing on top
+    # of these; "kjøreseddel" (taxi licence) is left out.
+    "driving license", "driver's licence", "driver’s license", "driver’s licence",
+    "drivers license", "driver licence",
 ]
 
 

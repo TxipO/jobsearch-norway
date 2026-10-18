@@ -773,6 +773,17 @@ def test_entry_keyword_in_advisory_title_does_not_open_warehouse_relevance():
     assert not bd["context_gate"]["matched"]
 
 
+def test_us_spelling_and_curly_apostrophe_licence_requirements_take_the_car_penalty():
+    """Live: Oda "Full-time Driver Lier" asks for "A valid driving license (Class B)"
+    and sat at 45 in the warehouse top 30."""
+    for line in ("A valid driving license (Class B).", "Valid driver’s license is required.",
+                 "Valid driver's licence is required."):
+        _, bd = _score("Driver", f"What you will need:\n{line}", profile="warehouse")
+        assert bd["car_penalty"]["points"] == -20, line
+    _, bd = _score("Driver", "What you will need:\nA driving license is an advantage.", profile="warehouse")
+    assert bd["car_penalty"]["points"] == 0, "an optional mention stays unpenalised"
+
+
 def test_nav_category_alone_makes_a_production_job_relevant_but_not_an_engineer():
     cats = '[{"level1": "Industri og produksjon", "level2": "Produksjon"}]'
     _, bd = _score("Production Operators", "Join our team.", municipal="OSLO", county="OSLO",
