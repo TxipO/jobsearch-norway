@@ -794,6 +794,19 @@ def test_nav_category_alone_makes_a_production_job_relevant_but_not_an_engineer(
     assert bd["context_gate"]["points"] < 0
 
 
+def test_professional_title_re_matches_whole_word_leder_and_phd():
+    """The pattern once held literal backspace characters instead of
+    word-boundary markers, so "leder" and "phd" never matched."""
+    cats = '[{"level1": "Industri og produksjon", "level2": "Produksjon"}]'
+    for title in ("Leder produksjon", "PhD fellow in materials"):
+        _, bd = _score(title, "Join our team.", municipal="OSLO", county="OSLO",
+                       occupation_categories=cats, profile="warehouse")
+        assert bd["context_gate"]["matched"], title
+    _, bd = _score("Produksjonsmedarbeider", "Join our team.", municipal="OSLO", county="OSLO",
+                   occupation_categories=cats, profile="warehouse")
+    assert not bd["context_gate"]["matched"]
+
+
 def test_nav_it_operations_tag_helps_it_profile_but_utvikling_is_not_penalized():
     ops = '[{"level1": "IT", "level2": "Drift, vedlikehold"}]'
     dev = '[{"level1": "IT", "level2": "Utvikling"}]'

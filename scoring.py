@@ -571,9 +571,9 @@ CONTEXT_GATE_FACTOR = 0.25
 # Professional-role titles: NAV's "Industri og produksjon"/"Transport og lager"
 # tag alone does not make these warehouse/production work.
 _PROFESSIONAL_TITLE_RE = re.compile(
-    r"engineer|ingeniør|manager|leder|sjef|controller|analyst|arkitekt|rådgiver|rådgjevar|"
+    r"engineer|ingeniør|manager|\bleder\b|sjef|controller|analyst|arkitekt|rådgiver|rådgjevar|"
     r"advis[eo]r|konsulent|consultant|special|spesialist|designer|developer|utvikler|"
-    r"scientist|forsker|physicist|phd|prosjekt|project"
+    r"scientist|forsker|physicist|\bphd\b|prosjekt|project"
 )
 # Advisory roles whose title keyword is a topic, not the work: "Sommerjobb
 # rådgiver Vannkraft" (Sweco students), "Rådgiver Logistikk og Servicetjenester"
