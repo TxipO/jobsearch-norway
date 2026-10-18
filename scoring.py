@@ -42,6 +42,15 @@ IT_SUPPORT_KEYWORDS = [
     "supportspesialist", "supportmedarbeider",
 ]
 
+# Subsets of IT_SUPPORT_KEYWORDS used by the gate in score_vacancy(): support-line
+# words that also mean "first line" in non-IT work, and generic tool/skill words
+# that do not by themselves show a support role.
+LINE_LEVEL_KEYWORDS = {
+    "1. linje", "1.linje", "førstelinje", "2. linje", "2.linje", "andrelinje",
+    "3. linje", "3.linje", "tredjelinje",
+}
+IT_WEAK_CONTEXT_KEYWORDS = {"windows", "microsoft 365", "office 365", "feilsøking", "troubleshooting"}
+
 # The user's target role family (2026-10-18: hybrid support + drift in a small
 # organisation), TITLE-ONLY. Measured on the live corpus: LinkedIn rows have no
 # description, so "IT-tekniker" (Bergen) and "IT-driftstekniker – server,
@@ -664,6 +673,21 @@ def score_vacancy(
     # (Electricians ×2, Industrial Maintenance Mechanic, Sheet Metal
     # Workers, Hardware Test Engineer, power systems, a camper-rental
     # manager). Two of them were user-flagged the same day.
+    # Support-line words ("førstelinje", "1. linje", "andrelinje"...) also mean
+    # "first line" of child welfare, vets, law firms, call centres. Measured
+    # 2026-10-18: 65 visible ads contain one, 54 of them as the ONLY IT match
+    # (Barnevernkonsulent, Skatteetaten "Kompetansemiljø eiendom", brannmester,
+    # veterinarian, saksbehandler...), 3 more with only windows/microsoft 365/
+    # feilsøking, and Barnevernkonsulent "førstelinje" + "andrelinje" + "microsoft
+    # 365" reached the relevance bar. They now count only with a real support
+    # keyword next to them (or when the position's own title carries one).
+    if (
+        any(kw in LINE_LEVEL_KEYWORDS for kw in it_kw)
+        and not any(kw in title_l for kw in it_kw if kw in LINE_LEVEL_KEYWORDS)
+        and all(kw in LINE_LEVEL_KEYWORDS or kw in IT_WEAK_CONTEXT_KEYWORDS for kw in it_kw)
+    ):
+        it_kw = [kw for kw in it_kw if kw not in LINE_LEVEL_KEYWORDS]
+        it_hits = len(it_kw)
     if it_kw in (["feilsøking"], ["troubleshooting"], ["feilsøking", "troubleshooting"]):
         it_hits, it_kw = 0, []
     # 2026-10-10: the IT-support and dev tracks are zeroed in the "warehouse"

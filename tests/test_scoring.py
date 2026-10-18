@@ -835,6 +835,19 @@ def test_ikt_konsulent_counts_as_it_support_keyword():
     assert bd["track_it_support"]["points"] == 16, "title hit counts double"
 
 
+def test_support_line_words_need_a_real_support_keyword():
+    """Live: Barnevernkonsulent ("førstelinje" + "andrelinje" + "microsoft 365" in
+    the tools list) reached the IT relevance bar."""
+    _, bd = _score("Barnevernkonsulent", "Førstelinjetjenesten og andrelinje. Kjennskap til Microsoft 365.",
+                   profile="it")
+    assert bd["track_it_support"]["matched"] == ["microsoft 365"]
+    assert bd["context_gate"]["matched"]
+    _, bd = _score("Konsulent", "Du jobber i førstelinje med brukerstøtte.", profile="it")
+    assert set(bd["track_it_support"]["matched"]) == {"brukerstøtte", "førstelinje"}
+    _, bd = _score("1.linje konsulent velferdsteknologi", None, profile="it")
+    assert bd["track_it_support"]["matched"] == ["1.linje"], "a line word in the title describes the position"
+
+
 def test_title_keyword_counts_double_for_it_track():
     _, in_body = _score("Konsulent", "Du jobber med servicedesk.", profile="it")
     _, in_title = _score("Servicedesk konsulent", "Du jobber.", profile="it")
