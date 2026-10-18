@@ -807,6 +807,19 @@ def test_professional_title_re_matches_whole_word_leder_and_phd():
     assert not bd["context_gate"]["matched"]
 
 
+def test_nav_it_tag_cancels_the_warehouse_category_bonus():
+    """Live: a Skatteetaten data-scientist ad tagged IT + Industri og produksjon
+    scored 50 in the warehouse top 15 through the category alone."""
+    both = '[{"level1": "IT", "level2": "Utvikling"}, {"level1": "Industri og produksjon", "level2": "Produksjon"}]'
+    only = '[{"level1": "Industri og produksjon", "level2": "Produksjon"}]'
+    _, bd = _score("Bli med og utvikle fremtidens KI-løsninger", "Vi søker deg.", municipal="OSLO",
+                   county="OSLO", occupation_categories=both, profile="warehouse")
+    assert bd["occupation_category_bonus"]["points"] == 0 and bd["context_gate"]["matched"]
+    _, bd = _score("Bli med i teamet", "Vi søker deg.", municipal="OSLO", county="OSLO",
+                   occupation_categories=only, profile="warehouse")
+    assert bd["occupation_category_bonus"]["points"] == 15 and not bd["context_gate"]["matched"]
+
+
 def test_nav_it_operations_tag_helps_it_profile_but_utvikling_is_not_penalized():
     ops = '[{"level1": "IT", "level2": "Drift, vedlikehold"}]'
     dev = '[{"level1": "IT", "level2": "Utvikling"}]'

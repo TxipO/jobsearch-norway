@@ -823,7 +823,17 @@ def score_vacancy(
     # Live case 2026-08-29: "Ekstrahjelp Skanem Bergen" got +30 from this
     # stacking alone, more than track_general_entry_level's own 30-point cap.
     category_bonus_raw = sum(OCCUPATION_CATEGORY_BONUS.get(c, 0) for c in category_l1)
-    category_bonus = min(category_bonus_raw, 15) if profile == "warehouse" else 0
+    # Not when NAV also tags the ad "IT" (2026-10-18): 13 visible ads carry IT
+    # plus Industri/Transport and none is warehouse work - a Skatteetaten data
+    # scientist ("Bli med og utvikle fremtidens KI-løsninger", 50 in the top
+    # 15), "Vil du bygge dataløsninger…", cybersecurity and engineer-network
+    # ads, an air-traffic coordinator. The sentence titles evade
+    # _PROFESSIONAL_TITLE_RE, so the tag itself has to be the signal. A
+    # dev-keyword rule (>= 2 DEV_SECURITY hits) was measured too and dropped:
+    # "utvikler"/"programmer" are common verbs, it added only 3 more ads.
+    category_bonus = (
+        min(category_bonus_raw, 15) if profile == "warehouse" and "IT" not in category_l1 else 0
+    )
     category_penalty = sum(OCCUPATION_CATEGORY_PENALTY.get(c, 0) for c in category_l1)
     breakdown["occupation_category_bonus"] = {"points": category_bonus + category_penalty, "matched": sorted(category_l1)}
 
