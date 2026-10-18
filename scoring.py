@@ -152,6 +152,17 @@ SENIOR_TITLE_KEYWORDS = [
     "senior", "lead ", "teamlead", "team lead", "avdelingsleder",
     "erfaren ",
 ]
+# Management titles that carry no penalty keyword above (2026-10-18). Measured on
+# the live corpus (7605 visible): "head of" 10 titles, "...sjef" 163, a title
+# STARTING with leder/leiar/ledar 34, "vil du lede" 76 — every one a line-
+# management or director role, e.g. "Head of Enterprise IT" 49, a "Teknologisjef
+# / Head of Technology" 39, "Leder Brukerstøtte" 36 and "Vil du lede et av
+# Norges viktigste miljøer for IT-brukerstøtte?" 26 in the IT top 30, and
+# "MONTASJESJEF" 37 in warehouse. Narrow on purpose: `sjef\b` skips "bagasjeflyt"
+# and "Restaurantsjefsstilling" (a waiter ad); a bare "leder" anywhere would hit
+# "Vikariat som assisterende Service Desk Manager" and every prosjektleder.
+# "teamleder" not added: all 29 live titles already score <= 10.
+MANAGEMENT_TITLE_RE = re.compile(r"\bhead of\b|sjef\b|^\s*(?:leder|leiar|ledar)\b|\bvil du lede\b")
 
 # Matched clause by clause through _firm_pattern_matches (2026-10-05,
 # /fullreview deep) — a bare substring match penalised "Vi har over 25 års
@@ -690,7 +701,7 @@ def score_vacancy(
     entry_level_bonus = 12 if is_entry_level else 0
     breakdown["entry_level_bonus"] = {"points": entry_level_bonus, "matched": is_entry_level}
 
-    is_senior_title = any(kw in title_l for kw in SENIOR_TITLE_KEYWORDS)
+    is_senior_title = any(kw in title_l for kw in SENIOR_TITLE_KEYWORDS) or bool(MANAGEMENT_TITLE_RE.search(title_l))
     requires_years = bool(_firm_pattern_matches(text, YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True))
     senior_penalty = (-15 if is_senior_title else 0) + (-10 if requires_years else 0)
     breakdown["senior_penalty"] = {

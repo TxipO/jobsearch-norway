@@ -783,6 +783,21 @@ def test_nav_it_operations_tag_alone_gives_no_points_and_no_relevance():
     assert bd["context_gate"]["matched"], "the tag with no IT keyword must not open relevance"
 
 
+def test_management_titles_take_the_senior_penalty():
+    for title in ("Head of Enterprise IT", "Teknologisjef", "Leder Brukerstøtte",
+                  "Vil du lede et av Norges viktigste miljøer for IT-brukerstøtte?"):
+        _, bd = _score(title, None, profile="it")
+        assert bd["senior_penalty"]["matched"]["senior_title"], title
+
+
+def test_management_title_rule_leaves_coordinators_and_lookalikes_alone():
+    for title in ("Vikariat som assisterende Service Desk Manager", "IT-support",
+                  "Vil du sikre datakvaliteten bak bagasjeflyt?", "Servitør med mulighet for Restaurantsjefsstilling",
+                  "Prosjektleder IT-drift"):
+        _, bd = _score(title, None, profile="it")
+        assert not bd["senior_penalty"]["matched"]["senior_title"], title
+
+
 def test_title_keyword_counts_double_for_it_track():
     _, in_body = _score("Konsulent", "Du jobber med servicedesk.", profile="it")
     _, in_title = _score("Servicedesk konsulent", "Du jobber.", profile="it")
