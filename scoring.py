@@ -650,7 +650,12 @@ def score_vacancy(
         it_kw = it_kw + [target_title]
     it_score = min((it_hits + it_title_hits) * 8, 40) if profile == "it" else 0
     breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}
-    nav_it_ops = _has_nav_it_operations_tag(occupation_categories)
+    # The tag counts only next to a real IT keyword match (2026-10-18): measured
+    # on the live corpus, 26 of the 37 visible ads carrying it had NO IT keyword
+    # and it alone put a data engineer ("Vil du bygge dataløsninger…"), an SAP
+    # SuccessFactors HRIS lead, an Avinor baggage-data role and a Bane NOR
+    # service owner into the IT top 30 (+8 and the relevance gate).
+    nav_it_ops = _has_nav_it_operations_tag(occupation_categories) and it_score > 0
     nav_it_ops_points = 8 if nav_it_ops and profile == "it" else 0
     breakdown["nav_it_operations"] = {"points": nav_it_ops_points, "matched": nav_it_ops}
 

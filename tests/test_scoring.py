@@ -775,6 +775,14 @@ def test_nav_it_operations_tag_helps_it_profile_but_utvikling_is_not_penalized()
     assert s_dev == s_plain, "the NAV 'Utvikling' tag sits on IT-konsulent roles; it must not move the score"
 
 
+def test_nav_it_operations_tag_alone_gives_no_points_and_no_relevance():
+    ops = '[{"level1": "IT", "level2": "Drift, vedlikehold"}]'
+    _, bd = _score("Vil du bygge dataløsninger?", "Vi trenger deg i teamet.", municipal="OSLO",
+                   county="OSLO", occupation_categories=ops, profile="it")
+    assert bd["nav_it_operations"]["points"] == 0
+    assert bd["context_gate"]["matched"], "the tag with no IT keyword must not open relevance"
+
+
 def test_title_keyword_counts_double_for_it_track():
     _, in_body = _score("Konsulent", "Du jobber med servicedesk.", profile="it")
     _, in_title = _score("Servicedesk konsulent", "Du jobber.", profile="it")
