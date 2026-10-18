@@ -753,6 +753,26 @@ def test_context_bonuses_are_gated_by_profile_relevance():
     assert relevant - irrelevant >= 30
 
 
+def test_lone_body_keyword_does_not_open_warehouse_relevance():
+    """Live: "Supply Chain Manager" (only 'warehouse' in the body) scored 51."""
+    _, bd = _score("Supply Chain Manager", "Experience from a warehouse environment.", municipal="OSLO",
+                   county="OSLO", profile="warehouse")
+    assert bd["context_gate"]["matched"]
+    _, bd = _score("Supply Chain Manager", "Warehouse and logistikk responsibility.", municipal="OSLO",
+                   county="OSLO", profile="warehouse")
+    assert not bd["context_gate"]["matched"], "two different keywords still open it"
+    _, bd = _score("Lagermedarbeider", "Join us.", municipal="OSLO", county="OSLO", profile="warehouse")
+    assert not bd["context_gate"]["matched"], "a keyword in the title opens it"
+
+
+def test_entry_keyword_in_advisory_title_does_not_open_warehouse_relevance():
+    for title in ("Sommerjobb rådgiver Vannkraft", "Rådgiver Logistikk og Servicetjenester"):
+        _, bd = _score(title, "Vi søker deg.", municipal="OSLO", county="OSLO", profile="warehouse")
+        assert bd["context_gate"]["matched"], title
+    _, bd = _score("Lagermedarbeidere til arkivflytteprosjekt", "Vi søker deg.", profile="warehouse")
+    assert not bd["context_gate"]["matched"]
+
+
 def test_nav_category_alone_makes_a_production_job_relevant_but_not_an_engineer():
     cats = '[{"level1": "Industri og produksjon", "level2": "Produksjon"}]'
     _, bd = _score("Production Operators", "Join our team.", municipal="OSLO", county="OSLO",

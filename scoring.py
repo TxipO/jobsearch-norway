@@ -553,6 +553,16 @@ _PROFESSIONAL_TITLE_RE = re.compile(
     r"advis[eo]r|konsulent|consultant|special|spesialist|designer|developer|utvikler|"
     r"scientist|forsker|physicist|phd|prosjekt|project"
 )
+# Advisory roles whose title keyword is a topic, not the work: "Sommerjobb
+# rådgiver Vannkraft" (Sweco students), "Rådgiver Logistikk og Servicetjenester"
+# (parking administration), "Technical Customer Service Specialist". Narrower
+# than _PROFESSIONAL_TITLE_RE on purpose: its "prosjekt" also sits in
+# "lagermedarbeidere til arkivflytteprosjekt" and "montør til prosjektbasert
+# arbeid" - of the 16 live titles with an entry keyword AND a professional
+# word (2026-10-18) those two were the only real warehouse/installer ads.
+_ADVISORY_TITLE_RE = re.compile(
+    r"rådgiver|rådgjevar|advis[eo]r|konsulent|consultant|special|spesialist|manager|engineer|ingeniør"
+)
 
 
 def _count_keyword_hits(text: str, keywords: list[str]) -> tuple[int, list[str]]:
@@ -819,7 +829,22 @@ def score_vacancy(
         # "Bruk jussen til å løse eiendomsspørsmål" a top-10 IT result).
         relevant = it_score >= 16 or nav_it_ops
     else:
-        relevant = entry_track_score > 0 or (category_bonus > 0 and not _PROFESSIONAL_TITLE_RE.search(title_l))
+        # A lone BODY keyword is not enough (2026-10-18): of 2215 visible
+        # warehouse-relevant ads 645 matched exactly one keyword, not in the
+        # title and with no NAV category - 608 of them NAV retail/cafe ads
+        # ("kundeservice" 258, "kundebehandling" 152, "logistikk" 101), plus
+        # "Trainee prosjektledelse serviceanlegg", "Supply Chain Manager" (only
+        # "warehouse"), a Statnett trainee, "Desktop Support Engineer" (only
+        # "customer service"). About 7 real production titles ("Fabrikkoperatør",
+        # "Gjenbruksoperatør") lose the gate too but scored <= 16 anyway. So:
+        # a keyword in the title (not on an advisory title, _ADVISORY_TITLE_RE),
+        # a vikar/deltid title word, or two different keywords anywhere.
+        entry_relevant = (
+            (entry_kw_in_title > 0 and not _ADVISORY_TITLE_RE.search(title_l))
+            or bool(entry_title_hits)
+            or entry_hits >= 2
+        )
+        relevant = entry_relevant or (category_bonus > 0 and not _PROFESSIONAL_TITLE_RE.search(title_l))
     context_points = sum(
         max(breakdown[k]["points"], 0)
         for k in ("location_bonus", "remote_bonus", "language_bonus", "entry_level_bonus")
