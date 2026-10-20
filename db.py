@@ -376,9 +376,26 @@ def upsert_active_vacancy(conn: sqlite3.Connection, uuid: str, status: str, ad: 
     return is_new
 
 
+def _language_if_description_unchanged(conn: sqlite3.Connection, uuid: str, description: str | None) -> str | None:
+    """The stored language of `uuid` when its stored description is exactly
+    `description`, else None. langdetect costs ~15 ms a row and jobbnorge
+    re-upserts all ~1 000 rows on every sync with a description that is almost
+    always the one already stored (17 s of a 26 s jobbnorge sync, 2026-10-20);
+    detecting the same text again could only reproduce - or, since langdetect is
+    unseeded, randomly flip - the value that is already there. A NULL stored
+    language is not trusted (it also means "never detected"), so those rows are
+    detected again."""
+    if description is None:
+        return None
+    prev = conn.execute("SELECT description, language FROM vacancies WHERE uuid = ?", (uuid,)).fetchone()
+    if prev is not None and prev[0] == description:
+        return prev[1]
+    return None
+
+
 def upsert_vacancy_row(
     conn: sqlite3.Connection, row: dict, source: str, ignore_dismissed: bool = False,
-    manually_added: bool = False,
+    manually_added: bool = False, commit: bool = True,
 ) -> bool:
     """Source-agnostic upsert for anything already shaped like our flat
     `vacancies` columns (see jobbnorge_client.to_vacancy_row). NAV keeps its
@@ -427,12 +444,23 @@ def upsert_vacancy_row(
 
     `manually_added=True` (the web add form only) sets the manually_added
     marker; once set, no later upsert — e.g. a digest re-read of the same
-    LinkedIn id — clears it, so retire_stale_digest_rows keeps the row."""
+    LinkedIn id — clears it, so retire_stale_digest_rows keeps the row.
+
+    `commit=False` leaves the transaction open for a caller that writes many
+    rows (jobbnorge.sync) and commits once; every other caller keeps the
+    per-row commit.
+
+    The language is re-detected only for a new row or a changed description
+    (see _language_if_description_unchanged); a source without a description
+    (finn.no, LinkedIn) is unaffected - detect_language(None) stays None."""
     if is_dismissed(conn, row["uuid"]):
         if not ignore_dismissed:
             return False
         conn.execute("DELETE FROM dismissed_vacancies WHERE uuid = ?", (row["uuid"],))
-    language = detect_language(row.get("description"))
+    language = (
+        _language_if_description_unchanged(conn, row["uuid"], row.get("description"))
+        or detect_language(row.get("description"))
+    )
     conn.execute(
         """
         INSERT INTO vacancies (
@@ -471,7 +499,8 @@ def upsert_vacancy_row(
             source, language, int(manually_added),
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return True
 
 
@@ -517,9 +546,10 @@ def mark_description_fetch_attempted(conn: sqlite3.Connection, uuid: str) -> Non
     )
 
 
-def set_extent_percent(conn: sqlite3.Connection, uuid: str, percent: int | None) -> None:
+def set_extent_percent(conn: sqlite3.Connection, uuid: str, percent: int | None, commit: bool = True) -> None:
     conn.execute("UPDATE vacancies SET extent_percent = ? WHERE uuid = ?", (percent, uuid))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def set_borrowed_description(

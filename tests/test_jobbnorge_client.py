@@ -130,3 +130,69 @@ def test_fetch_all_jobs_caps_pages_if_api_ignores_page_param(monkeypatch, caplog
     assert len(calls) == jc.MAX_PAGES
     assert len(jobs) == jc.MAX_PAGES * jc.PAGE_SIZE
     assert any("pagination stopped" in r.message for r in caplog.records)
+
+
+def _job(job_id, summary="Short summary that is long enough for language detection to bother."):
+    return {"id": job_id, "title": "IT-konsulent", "employer": "X", "location": "Oslo",
+            "summary": summary, "link": "https://x", "deadline": None,
+            "jobDuration": "Fast", "jobScope": "Heltid", "isInternal": False}
+
+
+def test_language_is_detected_only_for_new_rows_or_changed_descriptions(tmp_path, monkeypatch):
+    """langdetect was 17 s of a 26 s jobbnorge sync: every row re-detected its
+    unchanged description on every sync (2026-10-20)."""
+    conn = db.connect(tmp_path / "test.db")
+    calls = []
+    real = db.detect_language
+    monkeypatch.setattr(db, "detect_language", lambda text: calls.append(text) or real(text))
+    monkeypatch.setattr(jc, "_build_municipality_county_map", lambda: {})
+    monkeypatch.setattr(jc, "backfill_full_descriptions", lambda conn: 0)
+    jobs = [_job(1), _job(2)]
+    monkeypatch.setattr(jc, "fetch_all_jobs", lambda: jobs)
+
+    jc.sync(conn)
+    assert len(calls) == 2  # both new
+    stored = {r["uuid"]: r["language"] for r in conn.execute("SELECT uuid, language FROM vacancies")}
+
+    jc.sync(conn)
+    assert len(calls) == 2, "unchanged descriptions must not be detected again"
+    assert {r["uuid"]: r["language"] for r in conn.execute("SELECT uuid, language FROM vacancies")} == stored
+
+    jobs[1] = _job(2, summary="Dette er en helt ny og lengre beskrivelse av stillingen som IT-konsulent.")
+    jc.sync(conn)
+    assert len(calls) == 3, "only the changed description is detected again"
+    assert db.get_vacancy(conn, "jobbnorge-2")["language"] == real(jobs[1]["summary"])
+
+
+def test_language_with_no_stored_value_is_detected_again(tmp_path, monkeypatch):
+    conn = db.connect(tmp_path / "test.db")
+    text = "Dette er en tilstrekkelig lang beskrivelse av en stilling i Oslo."
+    db.upsert_vacancy_row(conn, {"uuid": "jobbnorge-9", "title": "T", "description": text}, source="jobbnorge")
+    conn.execute("UPDATE vacancies SET language = NULL WHERE uuid = 'jobbnorge-9'")
+    conn.commit()
+
+    db.upsert_vacancy_row(conn, {"uuid": "jobbnorge-9", "title": "T", "description": text}, source="jobbnorge")
+
+    assert db.get_vacancy(conn, "jobbnorge-9")["language"] == db.detect_language(text)
+
+
+def test_sync_commits_rows_written_before_a_mid_loop_exception(tmp_path, monkeypatch):
+    """The loop commits once instead of per row, but a failure part-way must
+    still leave the already-written rows persisted (the old per-row behaviour),
+    not rolled back or left as an open transaction for the next source."""
+    conn = db.connect(tmp_path / "test.db")
+    monkeypatch.setattr(jc, "_build_municipality_county_map", lambda: {})
+    monkeypatch.setattr(jc, "backfill_full_descriptions", lambda conn: 0)
+    bad = _job(3)
+    del bad["id"]  # to_vacancy_row raises KeyError
+    monkeypatch.setattr(jc, "fetch_all_jobs", lambda: [_job(1), _job(2), bad])
+
+    try:
+        jc.sync(conn)
+        assert False, "expected KeyError"
+    except KeyError:
+        pass
+
+    assert not conn.in_transaction
+    other = db.connect(tmp_path / "test.db")
+    assert {r[0] for r in other.execute("SELECT uuid FROM vacancies")} == {"jobbnorge-1", "jobbnorge-2"}

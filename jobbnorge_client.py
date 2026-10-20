@@ -321,17 +321,24 @@ def sync(conn: sqlite3.Connection) -> dict:
     ).fetchall())
 
     written = 0
-    for job in jobs:
-        row = to_vacancy_row(job, municipality_county)
-        if row["uuid"] in existing_full:
-            row["description"] = existing_full[row["uuid"]]
-        pct = _parse_extent_percent(job.get("jobScope"), row["title"], row["description"])
-        # False = tombstoned uuid, nothing written: not counted and no row to
-        # set the extent on (review 2026-10-05).
-        if not upsert_vacancy_row(conn, row, source="jobbnorge"):
-            continue
-        written += 1
-        set_extent_percent(conn, row["uuid"], pct)
+    # One transaction for the whole loop (2 075 commits = 3.7 s, 2026-10-20).
+    # The finally keeps the old failure semantics: rows written before an
+    # exception are committed, not rolled back and not left open for whichever
+    # source commits next on the shared connection.
+    try:
+        for job in jobs:
+            row = to_vacancy_row(job, municipality_county)
+            if row["uuid"] in existing_full:
+                row["description"] = existing_full[row["uuid"]]
+            pct = _parse_extent_percent(job.get("jobScope"), row["title"], row["description"])
+            # False = tombstoned uuid, nothing written: not counted and no row to
+            # set the extent on (review 2026-10-05).
+            if not upsert_vacancy_row(conn, row, source="jobbnorge", commit=False):
+                continue
+            written += 1
+            set_extent_percent(conn, row["uuid"], pct, commit=False)
+    finally:
+        conn.commit()
 
     marked_inactive, warning = _deactivate_missing(
         conn, {f"jobbnorge-{j['id']}" for j in jobs}, bool(getattr(all_jobs, "complete", False)),
