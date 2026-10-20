@@ -196,3 +196,57 @@ def test_sync_commits_rows_written_before_a_mid_loop_exception(tmp_path, monkeyp
     assert not conn.in_transaction
     other = db.connect(tmp_path / "test.db")
     assert {r[0] for r in other.execute("SELECT uuid FROM vacancies")} == {"jobbnorge-1", "jobbnorge-2"}
+
+
+def _county_fetchers(monkeypatch, counties_ok=True, postal_ok=True):
+    calls = {"counties": 0, "postal": 0}
+
+    def counties():
+        calls["counties"] += 1
+        if not counties_ok:
+            raise jc.requests.RequestException("down")
+        return [{"name": "Vestland", "municipality": [{"name": "Sogndal"}]}]
+
+    def postal():
+        calls["postal"] += 1
+        if not postal_ok:
+            raise jc.requests.RequestException("down")
+        return {"FJÆRLAND": "SOGNDAL"}
+
+    monkeypatch.setattr(jc, "fetch_counties", counties)
+    monkeypatch.setattr(jc, "fetch_poststed_to_municipality", postal)
+    return calls
+
+
+def test_county_map_is_built_once_for_the_three_callers_of_one_sync(monkeypatch):
+    """jobbnorge, finn and linkedin each asked for it: 2 downloads x 3 per sync."""
+    calls = _county_fetchers(monkeypatch)
+
+    first = jc._build_municipality_county_map()
+    first["POISON"] = "x"  # a caller mutating its copy must not leak into the next
+    second = jc._build_municipality_county_map()
+
+    assert second == {"SOGNDAL": "Vestland", "FJÆRLAND": "Vestland"}
+    assert calls == {"counties": 1, "postal": 1}
+
+
+def test_county_map_cache_expires(monkeypatch):
+    calls = _county_fetchers(monkeypatch)
+    jc._build_municipality_county_map()
+    jc._county_map_cache["at"] -= jc.COUNTY_MAP_TTL_SECONDS + 1
+
+    jc._build_municipality_county_map()
+
+    assert calls["counties"] == 2
+
+
+def test_failed_or_partial_county_map_is_not_cached(monkeypatch):
+    calls = _county_fetchers(monkeypatch, counties_ok=False)
+    assert jc._build_municipality_county_map() == {}
+    assert jc._build_municipality_county_map() == {}
+    assert calls["counties"] == 2, "a failed lookup must be retried by the next caller"
+
+    calls = _county_fetchers(monkeypatch, postal_ok=False)
+    assert jc._build_municipality_county_map() == {"SOGNDAL": "Vestland"}  # municipality-only, as before
+    jc._build_municipality_county_map()
+    assert calls["counties"] == 2, "a map without the postal registry is retried too"

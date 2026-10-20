@@ -17,6 +17,7 @@ import concurrent.futures
 import logging
 import re
 import sqlite3
+import time
 
 import requests
 
@@ -166,8 +167,30 @@ def fetch_poststed_to_municipality() -> dict[str, str]:
     return lookup
 
 
+# One sync asks for this map three times (jobbnorge, finn, linkedin) and each
+# build is two HTTP downloads (counties + the postal registry, ~1.5 s). The
+# result is kept for a few minutes - long enough to cover the three calls of one
+# sync, short enough that a later sync starts fresh. Only a COMPLETE build is
+# cached: a failed county lookup ({}) or a missing postal registry is retried by
+# the next caller.
+COUNTY_MAP_TTL_SECONDS = 300
+_county_map_cache: dict = {}
+
+
 def _build_municipality_county_map() -> dict[str, str]:
-    """Place name (uppercased — municipality name, or a poststed that
+    cached = _county_map_cache.get("map")
+    if cached is not None and time.monotonic() - _county_map_cache["at"] < COUNTY_MAP_TTL_SECONDS:
+        return dict(cached)
+    lookup, complete = _fetch_municipality_county_map()
+    if complete:
+        _county_map_cache.update(map=lookup, at=time.monotonic())
+    return dict(lookup)
+
+
+def _fetch_municipality_county_map() -> tuple[dict[str, str], bool]:
+    """(map, complete) - `complete` is False when either download failed.
+
+    Place name (uppercased — municipality name, or a poststed that
     resolves to one) -> county name. Jobbnorge's `location` field is
     free-text, not a municipality id, so this is a best-effort match, not a
     geocoder. Good enough per PLAN.md point 4a: strictly better than the
@@ -204,16 +227,17 @@ def _build_municipality_county_map() -> dict[str, str]:
                     municipality_county[part.strip().upper()] = county["name"]
     except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as e:
         logger.warning(f"County lookup failed, continuing without county data: {e!r}")
-        return {}
+        return {}, False
 
     lookup = dict(municipality_county)
+    complete = True
     try:
         for poststed, municipality in fetch_poststed_to_municipality().items():
             if poststed not in lookup and municipality in municipality_county:
                 lookup[poststed] = municipality_county[municipality]
     except (requests.RequestException, UnicodeDecodeError):
-        pass  # postal registry is a bonus signal, not required — degrade to municipality-only matching
-    return lookup
+        complete = False  # postal registry is a bonus signal, not required — degrade to municipality-only matching
+    return lookup, complete
 
 
 class JobSnapshot(list):

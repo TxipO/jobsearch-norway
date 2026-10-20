@@ -39,6 +39,16 @@ def _tiny_png(path: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
+def fresh_county_map_cache():
+    """jobbnorge_client caches the county map for a few minutes; tests that
+    patch the fetchers must not see (or leave) a map built by another test."""
+    import jobbnorge_client
+    jobbnorge_client._county_map_cache.clear()
+    yield
+    jobbnorge_client._county_map_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def synthetic_personal(tmp_path_factory, monkeypatch):
     """Point cv_builder/reachability at a synthetic personal.json in tmp so
     tests never depend on (or leak) the real, gitignored profile/personal.json.
