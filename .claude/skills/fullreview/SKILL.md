@@ -346,6 +346,21 @@ traces to a real incident in this project, not a hypothetical.
 
 ---
 
+15. **Per-row work added to the sync path without timing the sync.** Every
+    scoring/hard_blocks rule runs for ~12 000 rows x 2 profiles on every
+    "Sync now", and every source upsert runs for every row it returns. Each
+    rule looks cheap on its own; together they compound silently, because
+    nothing measures sync duration. **Live case, 2026-10-20:** sync had
+    grown to ~185 s — rescore 81 s (profile-independent work done twice,
+    requirement clauses re-split ~6x per profile, 36 000 single-row
+    commits), Gmail 66 s (one IMAP round trip per message), Jobbnorge 26 s
+    (langdetect re-run on 1 000 unchanged descriptions). Found only because
+    the user complained. **The check:** after any change to scoring.py,
+    hard_blocks.py, a source client or db upsert/commit paths, time the
+    affected stage on a copy of the live DB (cProfile for hotspots) and
+    compare with the last known timing; a stage that grew more than ~20%
+    needs a reason or a fix.
+
 # Stage 3 — Security & privacy lens
 
 Project-specific surface — this app has no auth/session/multi-tenant layer
