@@ -190,7 +190,10 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
 
 def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # 30 s busy timeout (default 5 s): sync batches now commit as one big
+    # transaction, so a status click or CLI sync next to the server must wait
+    # for it instead of failing with "database is locked" (2026-10-20).
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     # SQLite's built-in LOWER()/LIKE only fold ASCII, so a search for
     # "Ålesund" or "Østfold" never matched even with identical case (found

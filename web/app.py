@@ -2,6 +2,7 @@ import html
 import json
 import re
 import sys
+import threading
 import time
 import uuid as uuid_module
 from datetime import datetime, timezone
@@ -517,14 +518,42 @@ def _safe_sync(source_fn, conn) -> dict:
 
 @app.post("/sync")
 def sync_route():
-    """HTTP wrapper: runs the sync, then 303s back to the list."""
-    trigger_sync()
+    """HTTP wrapper: runs the sync, then 303s back to the list (409 if one is
+    already running — the form JS shows a friendly message for that)."""
+    try:
+        trigger_sync()
+    except SyncAlreadyRunning:
+        return JSONResponse({"error": "sync already running"}, status_code=409)
     return RedirectResponse(url="/", status_code=303)
+
+
+class SyncAlreadyRunning(Exception):
+    """trigger_sync() was called while another sync is in progress."""
+
+
+# Single-flight guard. 2026-10-20 incident: a second tab/click started a
+# second sync while the first ran (two backups 6 s apart), and since the
+# one-transaction rewrite of jobbnorge_client.sync / rescore_all the second
+# one's jobbnorge hit the first one's write lock and failed with "database is
+# locked" after sqlite's busy timeout. ponytail: in-process only — the sync.py
+# CLI is a separate process and is not covered; CLI+server contention relies on
+# db.connect()'s 30 s busy timeout instead.
+_sync_lock = threading.Lock()
 
 
 def trigger_sync() -> dict:
     """The actual sync pass. Returns the stored summary dict (callable with
-    no args from the sync.py CLI; /sync's route function is sync_route)."""
+    no args from the sync.py CLI; /sync's route function is sync_route).
+    Raises SyncAlreadyRunning if another sync in this process is in progress."""
+    if not _sync_lock.acquire(blocking=False):
+        raise SyncAlreadyRunning()
+    try:
+        return _run_sync()
+    finally:
+        _sync_lock.release()
+
+
+def _run_sync() -> dict:
     # Snapshot the whole DB before touching it — see db.backup_db's own
     # docstring for why (2026-07-29 incident: no backup existed, ~50
     # vacancies' user_status got scrambled by an unrelated mistake with no

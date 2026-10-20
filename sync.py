@@ -22,7 +22,13 @@ if __name__ == "__main__":
     # pipeline (backup, per-source guards, rescore, deletes, auto-ignore,
     # summary state) — delegate to it so CLI and button can't drift again.
     # Imported here, not at module top, so importing sync stays side-effect free.
-    from web.app import trigger_sync
+    from web.app import SyncAlreadyRunning, trigger_sync
 
-    summary = trigger_sync()
+    # In practice never raised here: the lock is per-process and the CLI is its
+    # own process, so CLI+server contention is handled by db.connect()'s busy
+    # timeout, not by the lock.
+    try:
+        summary = trigger_sync()
+    except SyncAlreadyRunning:
+        sys.exit("A sync is already running in this process — not starting another.")
     print(json.dumps(summary, ensure_ascii=False, indent=2, default=str))

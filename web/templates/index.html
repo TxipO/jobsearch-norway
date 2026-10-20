@@ -14,7 +14,7 @@
 {% endif %}
 
 <div class="sync-bar">
-  <form method="post" action="/sync" onsubmit="event.preventDefault(); const b=this.querySelector('button'); b.disabled=true; b.textContent='Синхронізація… (може тривати до кількох хвилин)'; this.querySelector('.sync-progress').style.display='block'; fetch(this.action, {method: 'POST'}).then((resp) => { if (!resp.ok) alert('Sync завершився помилкою (HTTP ' + resp.status + ') — дивись консоль сервера.'); location.reload(); }).catch(() => { alert('Sync не вдався — сервер недоступний або з\u2019єднання обірвалось.'); location.reload(); });">
+  <form method="post" action="/sync" onsubmit="event.preventDefault(); const b=this.querySelector('button'); b.disabled=true; b.textContent='Синхронізація… (може тривати до кількох хвилин)'; this.querySelector('.sync-progress').style.display='block'; fetch(this.action, {method: 'POST'}).then((resp) => { if (resp.status === 409) alert('Sync уже йде в іншій вкладці — дочекайся, сторінка оновиться сама.'); else if (!resp.ok) alert('Sync завершився помилкою (HTTP ' + resp.status + ') — дивись консоль сервера.'); location.reload(); }).catch(() => { alert('Sync не вдався — сервер недоступний або з\u2019єднання обірвалось.'); location.reload(); });">
     <button type="submit" class="sync-btn">Sync now</button>
     <div class="sync-progress" style="display:none"><div class="sync-progress-bar"></div></div>
   </form>

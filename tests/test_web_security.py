@@ -204,6 +204,52 @@ def test_index_renders_nav_and_jobbnorge_error_banners(tmp_db):
     assert "Jobbnorge:</strong> не синхронізувався" in body
 
 
+def test_concurrent_sync_is_rejected_then_next_runs(tmp_db, monkeypatch):
+    # 2026-10-20: a second concurrent sync made jobbnorge fail with "database is locked".
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+
+    def blocking_nav(conn):
+        started.set()
+        release.wait(10)
+        return {"new": 1}
+
+    _stub_sync_pipeline(monkeypatch, nav=blocking_nav)
+    first = threading.Thread(target=web_app.trigger_sync)
+    first.start()
+    assert started.wait(10)
+
+    backups, sources = [], []
+    monkeypatch.setattr(web_app.db, "backup_db", lambda: backups.append(1))
+    monkeypatch.setattr(web_app.nav_client, "sync", lambda conn: sources.append(1) or {})
+    with pytest.raises(web_app.SyncAlreadyRunning):
+        web_app.trigger_sync()
+    resp = web_app.sync_route()
+    assert resp.status_code == 409
+    assert backups == [] and sources == []
+
+    release.set()
+    first.join(10)
+    assert not first.is_alive()
+    # Lock released: a new sync runs normally.
+    assert web_app.sync_route().status_code == 303
+    assert backups == [1] and sources == [1]
+
+
+def test_sync_lock_released_when_sync_raises(tmp_db, monkeypatch):
+    _stub_sync_pipeline(monkeypatch)
+
+    def boom(conn):
+        raise RuntimeError("rescore blew up")
+
+    monkeypatch.setattr(web_app.scoring, "rescore_all", boom)
+    with pytest.raises(RuntimeError):
+        web_app.trigger_sync()
+    monkeypatch.setattr(web_app.scoring, "rescore_all", lambda conn: 0)
+    assert web_app.trigger_sync()["scored"] == 0
+
+
 def test_sync_form_js_checks_response_ok():
     from pathlib import Path
     tpl = (Path(web_app.__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
