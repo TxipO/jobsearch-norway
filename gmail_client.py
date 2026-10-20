@@ -17,6 +17,7 @@ import email
 import imaplib
 import json
 import logging
+import re
 from email.policy import default as email_policy
 from pathlib import Path
 
@@ -81,6 +82,38 @@ def _load_credentials() -> tuple[str, str]:
     return data["email"], data["app_password"]
 
 
+# UIDs per FETCH round trip. One request per message cost ~0.4 s each (finn: 60
+# messages = 24.6 s, LinkedIn: 75 = ~30 s of a 185 s sync, 2026-10-20) - nearly
+# all of it latency, not bytes.
+FETCH_BATCH_SIZE = 50
+_UID_IN_FETCH_RE = re.compile(rb"\bUID (\d+)")
+
+
+def _fetch_raw_bodies(imap, uids: list[bytes]) -> list[tuple[bytes, bytes]]:
+    """[(uid, raw RFC822 bytes)] for `uids`, in the order given; a UID the
+    server returned nothing for is simply absent (same as the old per-message
+    `continue`). BODY.PEEK[] keeps the fetch read-only. A multi-message FETCH
+    answers with a flat list mixing (header, literal) tuples and bare b")"
+    (or b" UID 123)") entries, so each literal is matched back to its message
+    by the UID in its header - or in the bytes right after it, where a server
+    may put it - never by position. If the batch request itself fails, fall
+    back to one request per UID so a single bad message can't cost the rest."""
+    status, resp = imap.uid("fetch", b",".join(uids), "(UID BODY.PEEK[])")
+    raw_by_uid: dict[bytes, bytes] = {}
+    if status == "OK" and resp:
+        for i, item in enumerate(resp):
+            if not isinstance(item, tuple) or len(item) < 2 or not isinstance(item[1], bytes):
+                continue
+            tail = resp[i + 1] if i + 1 < len(resp) and isinstance(resp[i + 1], bytes) else b""
+            m = _UID_IN_FETCH_RE.search(item[0]) or _UID_IN_FETCH_RE.search(tail)
+            if m:
+                raw_by_uid[m.group(1)] = item[1]
+    elif len(uids) > 1:
+        logger.warning(f"Batch FETCH of {len(uids)} messages failed ({status}); retrying one by one")
+        return [pair for uid in uids for pair in _fetch_raw_bodies(imap, [uid])]
+    return [(uid, raw_by_uid[uid]) for uid in uids if uid in raw_by_uid]
+
+
 def fetch_plain_texts(query: str) -> list[str]:
     """Runs a Gmail-syntax search (the IMAP X-GM-RAW extension — accepts the
     exact same query language as the Gmail search box, e.g. "from:finn.no")
@@ -115,21 +148,19 @@ def fetch_plain_texts(query: str) -> list[str]:
         status, data = imap.uid("search", "X-GM-RAW", f'"{query}"')
         if status != "OK" or not data or not data[0]:
             return texts
-        for uid in data[0].split():
-            status, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[])")
-            if status != "OK" or not msg_data or not msg_data[0]:
-                continue
-            # One malformed message (bogus charset -> LookupError from
-            # get_content, bad MIME structure, ...) used to abort the whole
-            # batch and lose every other digest with it — skip just that
-            # message (2026-10-05 audit).
-            try:
-                raw = msg_data[0][1]
-                msg = email.message_from_bytes(raw, policy=email_policy)
-                body = msg.get_body(preferencelist=("plain",))
-                if body is not None:
-                    texts.append(body.get_content())
-            except (LookupError, ValueError, UnicodeError, IndexError, TypeError) as e:
-                logger.warning(f"Skipping unparseable message UID {uid!r}: {e!r}")
-                continue
+        uids = data[0].split()
+        for start in range(0, len(uids), FETCH_BATCH_SIZE):
+            for uid, raw in _fetch_raw_bodies(imap, uids[start:start + FETCH_BATCH_SIZE]):
+                # One malformed message (bogus charset -> LookupError from
+                # get_content, bad MIME structure, ...) used to abort the whole
+                # batch and lose every other digest with it - skip just that
+                # message (2026-10-05 audit).
+                try:
+                    msg = email.message_from_bytes(raw, policy=email_policy)
+                    body = msg.get_body(preferencelist=("plain",))
+                    if body is not None:
+                        texts.append(body.get_content())
+                except (LookupError, ValueError, UnicodeError, IndexError, TypeError) as e:
+                    logger.warning(f"Skipping unparseable message UID {uid!r}: {e!r}")
+                    continue
     return texts
