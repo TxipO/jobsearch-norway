@@ -632,6 +632,30 @@ def set_exclusion(conn: sqlite3.Connection, uuid: str, excluded: bool, reason: s
     conn.commit()
 
 
+def apply_rescore_batch(
+    conn: sqlite3.Connection, borrowed: list[tuple], extents: list[tuple],
+    salaries: list[tuple], scores: list[tuple],
+) -> None:
+    """scoring.rescore_all's writes in one transaction instead of one commit per
+    row. Same statements as set_borrowed_description (description,
+    description_borrowed_from, language, uuid), set_extent_percent (percent,
+    uuid), set_salary_text (text, min, uuid) and set_exclusion + set_score +
+    set_score_it merged into one UPDATE (excluded, reason, score, breakdown_json,
+    score_it, breakdown_it_json, uuid)."""
+    conn.executemany(
+        "UPDATE vacancies SET description = ?, description_borrowed_from = ?, language = ? WHERE uuid = ?",
+        borrowed,
+    )
+    conn.executemany("UPDATE vacancies SET extent_percent = ? WHERE uuid = ?", extents)
+    conn.executemany("UPDATE vacancies SET salary_text = ?, salary_min = ? WHERE uuid = ?", salaries)
+    conn.executemany(
+        "UPDATE vacancies SET excluded = ?, exclusion_reason = ?, score = ?, score_breakdown = ?, "
+        "score_it = ?, score_it_breakdown = ? WHERE uuid = ?",
+        scores,
+    )
+    conn.commit()
+
+
 def count_excluded(conn: sqlite3.Connection) -> int:
     return conn.execute(
         "SELECT COUNT(*) FROM vacancies WHERE status = 'ACTIVE' AND excluded = 1"

@@ -22,10 +22,16 @@ Design decisions (agreed with the user 2026-07-17, "вони нам не тре�
   letter could argue around.
 """
 
+import functools
 import re
 from bisect import bisect_right
 
 from textnorm import normalize_text
+
+# re.search(str, ...) re-resolves the pattern through re's module cache on every
+# call; check_exclusion runs ~130 title patterns per row. Same compiled objects,
+# one dict hit.
+_compile = functools.lru_cache(maxsize=None)(re.compile)
 
 # Health professions requiring authorisation under helsepersonelloven.
 # Norwegian authorisation requires a recognised education; the user's diploma
@@ -748,6 +754,15 @@ def _has_unmet_requirement(mention_re, clauses, training_re=None, title_l=None):
     return False
 
 
+def _clauses_if_mentioned(mention_re, body_l: str) -> list:
+    """iter_requirement_clauses(body_l) as a list - or [] when the mention
+    pattern occurs nowhere in body_l (a clause is a substring of the body, so
+    it cannot match either; _has_unmet_requirement then sees no mention index
+    exactly as it would with the full list). Saves the split for the ~95% of
+    ads that never name a truck certificate."""
+    return list(iter_requirement_clauses(body_l)) if mention_re.search(body_l) else []
+
+
 TRUCKFORERBEVIS_MENTION_RE = re.compile(r"truckfø")
 TRUCKFORERBEVIS_TRAINING_OFFERED_RE = re.compile(
     r"opplæring (vil bli gitt|kan gis|gis)|vi lærer deg opp|får opplæring|læres opp"
@@ -770,7 +785,7 @@ def _has_unmet_truckforerbevis_requirement(title_l: str, body_l: str) -> bool:
     2026-08-29): old rule blocked 21, this one blocks 51, with exactly 1
     acceptable regression (an ambiguous "krav" heading whose own bullet list
     mixed hard and soft items in a shape too tangled to split further)."""
-    clauses = list(iter_requirement_clauses(body_l))
+    clauses = _clauses_if_mentioned(TRUCKFORERBEVIS_MENTION_RE, body_l)
     return _has_unmet_requirement(
         TRUCKFORERBEVIS_MENTION_RE, clauses,
         training_re=TRUCKFORERBEVIS_TRAINING_OFFERED_RE, title_l=title_l,
@@ -788,7 +803,7 @@ FORKLIFT_CERT_MENTION_RE = re.compile(r"forklift (?:licen[cs]e|certificate|cert\
 
 
 def _has_unmet_forklift_certificate_requirement(title_l: str, body_l: str) -> bool:
-    clauses = list(iter_requirement_clauses(body_l))
+    clauses = _clauses_if_mentioned(FORKLIFT_CERT_MENTION_RE, body_l)
     return _has_unmet_requirement(FORKLIFT_CERT_MENTION_RE, clauses, title_l=title_l)
 
 
@@ -811,7 +826,7 @@ def _has_body_authorisation_requirement(body_l: str) -> bool:
     clause — see BODY_GENERIC_AUTHORISATION_PATTERNS."""
     for pattern in BODY_AUTHORISATION_PATTERNS + BODY_GENERIC_AUTHORISATION_PATTERNS:
         generic = pattern in BODY_GENERIC_AUTHORISATION_PATTERNS
-        for m in re.finditer(pattern, body_l):
+        for m in _compile(pattern).finditer(body_l):
             if _SOME_POSITIONS_RE.search(body_l[max(0, m.start() - 80):m.start()]):
                 continue
             if not _match_is_firm(body_l, m):
@@ -837,7 +852,7 @@ def check_exclusion(
 
     for _key, patterns, reason in BLOCK_CATEGORIES:
         for pattern in patterns:
-            if re.search(pattern, title_l):
+            if _compile(pattern).search(title_l):
                 return True, reason
 
     if (

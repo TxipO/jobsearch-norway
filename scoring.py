@@ -8,6 +8,7 @@ jobsearch-norway-profile memory file); don't add a signal here without a
 matching entry there.
 """
 
+import functools
 import json
 import re
 
@@ -341,7 +342,29 @@ _NEGATION_WINDOW = 40
 _EMPLOYER_BOILERPLATE_BEFORE_RE = re.compile(r"\bvi (?:har|hadde)\b[^.;]*$|\b(?:over|mer enn)\s*$")
 
 
-def _firm_pattern_matches(text: str, patterns: list[str], years_boilerplate: bool = False) -> list[str]:
+class _Clauses:
+    """The requirement clauses of ONE text, split on first use and shared by
+    every clause-aware check in score_vacancy (they used to re-split the same
+    text six times per call, twice per row)."""
+
+    __slots__ = ("text", "_list")
+
+    def __init__(self, text: str):
+        self.text = text
+        self._list = None
+
+    def get(self) -> list:
+        if self._list is None:
+            self._list = list(iter_requirement_clauses(self.text))
+        return self._list
+
+
+_compile = functools.lru_cache(maxsize=None)(re.compile)
+
+
+def _firm_pattern_matches(
+    text: str, patterns: list[str], years_boilerplate: bool = False, clauses: _Clauses | None = None,
+) -> list[str]:
     """Which of `patterns` match as a FIRM statement somewhere in `text`
     (already lowercased, one bullet/paragraph per line — see
     db.strip_html): not in a clause hard_blocks.has_optional_marker()
@@ -352,17 +375,32 @@ def _firm_pattern_matches(text: str, patterns: list[str], years_boilerplate: boo
     softness. `years_boilerplate` additionally skips a match preceded by
     "vi har ..." or a bare "over"/"mer enn" — unless the clause also states
     a requirement verb ("Du har over 3 års erfaring"), which keeps real
-    requirements that happen to use "over"."""
+    requirements that happen to use "over".
+
+    Speed (2026-10-20): a pattern absent from the whole text is absent from
+    every clause (a clause is a substring of the text and none of these
+    patterns has an anchor or lookbehind), so only patterns present anywhere
+    are tried per clause, and the softener check runs only for a clause where
+    one of them actually matched. `clauses` is the shared pre-split text."""
+    compiled = [(p, _compile(p)) for p in patterns]
+    present = [(p, rx) for p, rx in compiled if rx.search(text)]
+    if not present:
+        return []
+    if clauses is None:
+        clauses = _Clauses(text)
     firm: list[str] = []
-    for clause, in_required_section in iter_requirement_clauses(text):
+    for clause, in_required_section in clauses.get():
+        todo = [(p, rx) for p, rx in present if p not in firm and rx.search(clause)]
+        if not todo:
+            continue
         # No equivalence alternatives: "3 års erfaring ... eller tilsvarende"
         # is still a years requirement (review 2026-10-05).
         if has_optional_marker(clause, include_equivalence=False):
             continue
-        for p in patterns:
-            if p in firm:
+        for p, rx in todo:
+            if p in firm:  # the same pattern string listed twice
                 continue
-            for m in re.finditer(p, clause):
+            for m in rx.finditer(clause):
                 before = clause[:m.start()]
                 if _NEGATION_RE.search(before[-_NEGATION_WINDOW:]):
                     continue
@@ -377,7 +415,7 @@ def _firm_pattern_matches(text: str, patterns: list[str], years_boilerplate: boo
     return firm
 
 
-def _has_unmet_car_requirement(text: str) -> bool:
+def _has_unmet_car_requirement(text: str, clauses: _Clauses | None = None) -> bool:
     """Section/clause-aware, added 2026-08-30 (/fullreview deep, Stage 4):
     the previous bare `any(kw in text ...)` check gave the full -20 penalty
     to EVERY mention, including explicitly soft/negated ones — measured
@@ -387,7 +425,11 @@ def _has_unmet_car_requirement(text: str) -> bool:
     the truckførerbevis/forklift-certificate checks, so it reuses their
     exact clause/section machinery (hard_blocks.iter_requirement_clauses)
     rather than reimplementing it."""
-    for clause, in_required_section in iter_requirement_clauses(text):
+    if not any(kw in text for kw in CAR_REQUIRED_KEYWORDS):
+        return False
+    if clauses is None:
+        clauses = _Clauses(text)
+    for clause, in_required_section in clauses.get():
         if not any(kw in clause for kw in CAR_REQUIRED_KEYWORDS):
             continue
         if has_optional_marker(clause):
@@ -548,8 +590,12 @@ PROGRAMMING_EXPERIENCE_RE = re.compile(
 PROGRAMMING_EXPERIENCE_PENALTY = -25
 
 
-def _has_unmet_formal_qualification(text: str) -> bool:
-    for clause, in_required_section in iter_requirement_clauses(text):
+def _has_unmet_formal_qualification(text: str, clauses: _Clauses | None = None) -> bool:
+    if not FORMAL_QUALIFICATION_RE.search(text):
+        return False
+    if clauses is None:
+        clauses = _Clauses(text)
+    for clause, in_required_section in clauses.get():
         if not FORMAL_QUALIFICATION_RE.search(clause):
             continue
         if FORMAL_QUALIFICATION_IT_FIELD_RE.search(clause):
@@ -561,8 +607,12 @@ def _has_unmet_formal_qualification(text: str) -> bool:
     return False
 
 
-def _has_programming_experience_requirement(text: str) -> bool:
-    for clause, _ in iter_requirement_clauses(text):
+def _has_programming_experience_requirement(text: str, clauses: _Clauses | None = None) -> bool:
+    if not PROGRAMMING_EXPERIENCE_RE.search(text):
+        return False
+    if clauses is None:
+        clauses = _Clauses(text)
+    for clause, _ in clauses.get():
         if PROGRAMMING_EXPERIENCE_RE.search(clause) and not has_optional_marker(clause):
             return True
     return False
@@ -662,12 +712,58 @@ def score_vacancy(
     extent_percent: int | None = None,
     engagement_type: str | None = None,
 ) -> tuple[int, dict]:
+    return _score_profiles(
+        title, description_html, municipal, county, language, occupation_categories,
+        (profile,), extent_percent, engagement_type,
+    )[profile]
+
+
+def score_both_profiles(
+    title: str | None,
+    description_html: str | None,
+    municipal: str | None,
+    county: str | None,
+    language: str | None = None,
+    occupation_categories: str | None = None,
+    extent_percent: int | None = None,
+    engagement_type: str | None = None,
+    plain_description: str | None = None,
+) -> tuple[tuple[int, dict], tuple[int, dict]]:
+    """((warehouse score, breakdown), (it score, breakdown)) for one vacancy,
+    sharing the profile-independent work (text normalisation, keyword scans,
+    clause splitting, every regex check) that two score_vacancy() calls used to
+    repeat in full - 2026-10-20: score_vacancy was 71 of 88 profiled seconds of
+    rescore_all. `plain_description`, when the caller already holds
+    strip_html(description_html), skips recomputing it."""
+    res = _score_profiles(
+        title, description_html, municipal, county, language, occupation_categories,
+        ("warehouse", "it"), extent_percent, engagement_type, plain_description,
+    )
+    return res["warehouse"], res["it"]
+
+
+def _score_profiles(
+    title: str | None,
+    description_html: str | None,
+    municipal: str | None,
+    county: str | None,
+    language: str | None,
+    occupation_categories: str | None,
+    profiles: tuple[str, ...],
+    extent_percent: int | None,
+    engagement_type: str | None,
+    plain_description: str | None = None,
+) -> dict[str, tuple[int, dict]]:
+    """Everything that does not depend on the profile is computed once at the
+    top; the loop at the bottom only assembles the per-profile breakdown, in the
+    same key order score_vacancy() has always produced."""
     title_l = (title or "").lower()
-    text = f"{title_l} {strip_html(description_html)}".lower()
-    breakdown = {}
+    if plain_description is None:
+        plain_description = strip_html(description_html)
+    text = f"{title_l} {plain_description}".lower()
+    clauses = _Clauses(text)
 
     language_score = 10 if language == "en" else 0
-    breakdown["language_bonus"] = {"points": language_score, "language": language}
 
     it_hits, it_kw = _count_keyword_hits(text, IT_SUPPORT_KEYWORDS)
     # "feilsøking" (troubleshooting) alone is too generic a word to mean
@@ -728,16 +824,13 @@ def score_vacancy(
     if target_title:
         it_title_hits += 2
         it_kw = it_kw + [target_title]
-    it_score = min((it_hits + it_title_hits) * 8, 40) if profile == "it" else 0
-    breakdown["track_it_support"] = {"points": it_score, "matched": it_kw}
+    it_score_if_it = min((it_hits + it_title_hits) * 8, 40)
     # The tag counts only next to a real IT keyword match (2026-10-18): measured
     # on the live corpus, 26 of the 37 visible ads carrying it had NO IT keyword
     # and it alone put a data engineer ("Vil du bygge dataløsninger…"), an SAP
     # SuccessFactors HRIS lead, an Avinor baggage-data role and a Bane NOR
     # service owner into the IT top 30 (+8 and the relevance gate).
-    nav_it_ops = _has_nav_it_operations_tag(occupation_categories) and it_score > 0
-    nav_it_ops_points = 8 if nav_it_ops and profile == "it" else 0
-    breakdown["nav_it_operations"] = {"points": nav_it_ops_points, "matched": nav_it_ops}
+    nav_it_tag = _has_nav_it_operations_tag(occupation_categories)
 
     # Two profiles, 2026-08-27 user-requested toggle: "warehouse" is the
     # 2026-08-18 retarget (production/склад/логистика, current default),
@@ -750,47 +843,34 @@ def score_vacancy(
     entry_hits, entry_kw = _count_keyword_hits(text, GENERAL_ENTRY_KEYWORDS)
     entry_title_hits = [kw for kw in GENERAL_ENTRY_TITLE_KEYWORDS if kw in title_l]
     entry_kw_in_title = sum(1 for kw in entry_kw if kw in title_l)  # title match counts double
-    entry_track_score = (
-        min((entry_hits + len(entry_title_hits) + entry_kw_in_title) * 6, 30) if profile == "warehouse" else 0
-    )
-    breakdown["track_general_entry_level"] = {"points": entry_track_score, "matched": entry_kw + entry_title_hits}
+    entry_track_score_if_wh = min((entry_hits + len(entry_title_hits) + entry_kw_in_title) * 6, 30)
 
     dev_hits, dev_kw = _count_keyword_hits(text, DEV_SECURITY_KEYWORDS)
-    dev_score = min(dev_hits * 3, 15) if profile == "it" else 0
-    breakdown["track_dev_security"] = {"points": dev_score, "matched": dev_kw}
+    dev_score_if_it = min(dev_hits * 3, 15)
 
     is_dev_title = any(kw in title_l for kw in DEV_TITLE_KEYWORDS)
     dev_title_penalty = DEV_TITLE_PENALTY if is_dev_title else 0
-    breakdown["dev_title_penalty"] = {"points": dev_title_penalty, "matched": is_dev_title}
 
     is_entry_level = (
         any(kw in text for kw in ENTRY_LEVEL_PHRASES)
         or any(kw in title_l for kw in ENTRY_LEVEL_TITLE_KEYWORDS)
     )
     entry_level_bonus = 12 if is_entry_level else 0
-    breakdown["entry_level_bonus"] = {"points": entry_level_bonus, "matched": is_entry_level}
 
     is_senior_title = any(kw in title_l for kw in SENIOR_TITLE_KEYWORDS) or bool(MANAGEMENT_TITLE_RE.search(title_l))
-    requires_years = bool(_firm_pattern_matches(text, YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True))
+    requires_years = bool(
+        _firm_pattern_matches(text, YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True, clauses=clauses)
+    )
     senior_penalty = (-15 if is_senior_title else 0) + (-10 if requires_years else 0)
-    breakdown["senior_penalty"] = {
-        "points": senior_penalty,
-        "matched": {"senior_title": is_senior_title, "years_required": requires_years},
-    }
 
-    management_matches = _firm_pattern_matches(text, MANAGEMENT_REQUIRED_PATTERNS)
+    management_matches = _firm_pattern_matches(text, MANAGEMENT_REQUIRED_PATTERNS, clauses=clauses)
     management_penalty = -30 if management_matches else 0
-    breakdown["management_penalty"] = {
-        "points": management_penalty,
-        "matched": management_matches,
-    }
 
     # "/hybrid)" title shorthand ("Java/Kotlin-utviklere (Oslo/Hybrid)") is
     # trusted unconditionally — titles are short and curated, unlike body
     # text nobody pads a title with an unrelated "hybrid" compound.
     is_remote = _keyword_present_unnegated(text, REMOTE_KEYWORDS) or "/hybrid)" in title_l
     remote_score = 15 if is_remote else 0
-    breakdown["remote_bonus"] = {"points": remote_score, "matched": is_remote}
 
     municipal_u = (municipal or "").upper()
     county_u = (county or "").upper()
@@ -806,15 +886,12 @@ def score_vacancy(
     else:
         location_score = 0
         location_reason = "utenfor Vestland"
-    breakdown["location_bonus"] = {"points": location_score, "reason": location_reason}
 
-    requires_car = _has_unmet_car_requirement(text)
+    requires_car = _has_unmet_car_requirement(text, clauses)
     car_penalty = -20 if requires_car else 0
-    breakdown["car_penalty"] = {"points": car_penalty, "matched": requires_car}
 
-    requires_degree = any(re.search(p, text) for p in DEGREE_REQUIRED_PATTERNS)
+    requires_degree = any(_compile(p).search(text) for p in DEGREE_REQUIRED_PATTERNS)
     degree_penalty = -10 if requires_degree else 0
-    breakdown["degree_penalty"] = {"points": degree_penalty, "matched": requires_degree}
 
     # Clause-aware like car_penalty (2026-10-05, /fullreview deep): "Vi
     # krever ikke flytende norsk" and "Flytende norsk er en fordel" used to
@@ -828,10 +905,10 @@ def score_vacancy(
                 r"(communication )?(skills )?in norwegian"
                 r"|fluent(ly)? in norwegian"
             ],
+            clauses=clauses,
         )
     )
     language_penalty = -20 if requires_norwegian_fluency else 0
-    breakdown["norwegian_fluency_penalty"] = {"points": language_penalty, "matched": requires_norwegian_fluency}
 
     # Same "it" profile carve-out as track_general_entry_level above: the
     # Industri og produksjon/Transport og lager BONUS is warehouse-specific
@@ -853,15 +930,11 @@ def score_vacancy(
     # _PROFESSIONAL_TITLE_RE, so the tag itself has to be the signal. A
     # dev-keyword rule (>= 2 DEV_SECURITY hits) was measured too and dropped:
     # "utvikler"/"programmer" are common verbs, it added only 3 more ads.
-    category_bonus = (
-        min(category_bonus_raw, 15) if profile == "warehouse" and "IT" not in category_l1 else 0
-    )
+    category_bonus_if_wh = min(category_bonus_raw, 15) if "IT" not in category_l1 else 0
     category_penalty = sum(OCCUPATION_CATEGORY_PENALTY.get(c, 0) for c in category_l1)
-    breakdown["occupation_category_bonus"] = {"points": category_bonus + category_penalty, "matched": sorted(category_l1)}
 
     is_phone_support = any(kw in text for kw in PHONE_SUPPORT_KEYWORDS)
     phone_penalty = -10 if is_phone_support else 0
-    breakdown["phone_support_penalty"] = {"points": phone_penalty, "matched": is_phone_support}
 
     # See RELOCATION_MIN_EXTENT_PERCENT/VIKARIAT_LONG_DURATION_RE for the
     # full rationale. Waived inside TIER_1 (local, no relocation needed) and
@@ -872,62 +945,96 @@ def score_vacancy(
     is_vikariat = (engagement_type or "").lower().startswith("vikariat")
     short_vikariat = needs_relocation and is_vikariat and not VIKARIAT_LONG_DURATION_RE.search(text)
     relocation_penalty = (RELOCATION_PENALTY if low_extent else 0) + (RELOCATION_PENALTY if short_vikariat else 0)
-    breakdown["relocation_worthiness_penalty"] = {
-        "points": relocation_penalty,
-        "matched": {"low_extent": low_extent, "short_vikariat": short_vikariat},
-    }
 
-    requires_formal_qualification = _has_unmet_formal_qualification(text)
+    requires_formal_qualification = _has_unmet_formal_qualification(text, clauses)
     formal_qualification_penalty = FORMAL_QUALIFICATION_PENALTY if requires_formal_qualification else 0
-    breakdown["formal_qualification_penalty"] = {
-        "points": formal_qualification_penalty, "matched": requires_formal_qualification,
-    }
 
-    requires_programming_experience = _has_programming_experience_requirement(text)
+    requires_programming_experience = _has_programming_experience_requirement(text, clauses)
     programming_experience_penalty = PROGRAMMING_EXPERIENCE_PENALTY if requires_programming_experience else 0
-    breakdown["programming_experience_penalty"] = {
-        "points": programming_experience_penalty, "matched": requires_programming_experience,
-    }
 
-    # Relevance gate (see CONTEXT_GATE_FACTOR). "Relevant" = the active
-    # profile's own track matched; for warehouse NAV's category tag also
-    # counts, unless the title reads as a professional role.
-    if profile == "it":
-        # Two weighted hits, not one: a lone "førstelinje" is also a law
-        # firm's / call centre's "first line" (measured 2026-10-10: it made
-        # "Bruk jussen til å løse eiendomsspørsmål" a top-10 IT result).
-        relevant = it_score >= 16 or nav_it_ops
-    else:
-        # A lone BODY keyword is not enough (2026-10-18): of 2215 visible
-        # warehouse-relevant ads 645 matched exactly one keyword, not in the
-        # title and with no NAV category - 608 of them NAV retail/cafe ads
-        # ("kundeservice" 258, "kundebehandling" 152, "logistikk" 101), plus
-        # "Trainee prosjektledelse serviceanlegg", "Supply Chain Manager" (only
-        # "warehouse"), a Statnett trainee, "Desktop Support Engineer" (only
-        # "customer service"). About 7 real production titles ("Fabrikkoperatør",
-        # "Gjenbruksoperatør") lose the gate too but scored <= 16 anyway. So:
-        # a keyword in the title (not on an advisory title, _ADVISORY_TITLE_RE),
-        # a vikar/deltid title word, or two different keywords anywhere.
-        entry_relevant = (
-            (entry_kw_in_title > 0 and not _ADVISORY_TITLE_RE.search(title_l))
-            or bool(entry_title_hits)
-            or entry_hits >= 2
-        )
-        relevant = entry_relevant or (category_bonus > 0 and not _PROFESSIONAL_TITLE_RE.search(title_l))
-    context_points = sum(
-        max(breakdown[k]["points"], 0)
-        for k in ("location_bonus", "remote_bonus", "language_bonus", "entry_level_bonus")
-    )
-    gate_points = 0 if relevant else -(round(context_points * (1 - CONTEXT_GATE_FACTOR)) + max(category_bonus, 0))
-    breakdown["context_gate"] = {"points": gate_points, "matched": not relevant}
+    context_points = sum(max(v, 0) for v in (location_score, remote_score, language_score, entry_level_bonus))
 
-    base = 10
-    total = base + sum(v["points"] for v in breakdown.values())
-    total = max(0, min(100, total))
-    breakdown["base"] = base
-    breakdown["total"] = total
+    results: dict[str, tuple[int, dict]] = {}
+    for profile in profiles:
+        is_it = profile == "it"
+        it_score = it_score_if_it if is_it else 0
+        nav_it_ops = nav_it_tag and it_score > 0
+        nav_it_ops_points = 8 if nav_it_ops and is_it else 0
+        entry_track_score = entry_track_score_if_wh if profile == "warehouse" else 0
+        dev_score = dev_score_if_it if is_it else 0
+        category_bonus = category_bonus_if_wh if profile == "warehouse" else 0
 
-    return total, breakdown
+        # Relevance gate (see CONTEXT_GATE_FACTOR). "Relevant" = the active
+        # profile's own track matched; for warehouse NAV's category tag also
+        # counts, unless the title reads as a professional role.
+        if is_it:
+            # Two weighted hits, not one: a lone "førstelinje" is also a law
+            # firm's / call centre's "first line" (measured 2026-10-10: it made
+            # "Bruk jussen til å løse eiendomsspørsmål" a top-10 IT result).
+            relevant = it_score >= 16 or nav_it_ops
+        else:
+            # A lone BODY keyword is not enough (2026-10-18): of 2215 visible
+            # warehouse-relevant ads 645 matched exactly one keyword, not in the
+            # title and with no NAV category - 608 of them NAV retail/cafe ads
+            # ("kundeservice" 258, "kundebehandling" 152, "logistikk" 101), plus
+            # "Trainee prosjektledelse serviceanlegg", "Supply Chain Manager" (only
+            # "warehouse"), a Statnett trainee, "Desktop Support Engineer" (only
+            # "customer service"). About 7 real production titles ("Fabrikkoperatør",
+            # "Gjenbruksoperatør") lose the gate too but scored <= 16 anyway. So:
+            # a keyword in the title (not on an advisory title, _ADVISORY_TITLE_RE),
+            # a vikar/deltid title word, or two different keywords anywhere.
+            entry_relevant = (
+                (entry_kw_in_title > 0 and not _ADVISORY_TITLE_RE.search(title_l))
+                or bool(entry_title_hits)
+                or entry_hits >= 2
+            )
+            relevant = entry_relevant or (category_bonus > 0 and not _PROFESSIONAL_TITLE_RE.search(title_l))
+        gate_points = 0 if relevant else -(round(context_points * (1 - CONTEXT_GATE_FACTOR)) + max(category_bonus, 0))
+
+        # Key order is the stored JSON's key order - keep it as it always was.
+        breakdown = {
+            "language_bonus": {"points": language_score, "language": language},
+            "track_it_support": {"points": it_score, "matched": list(it_kw)},
+            "nav_it_operations": {"points": nav_it_ops_points, "matched": nav_it_ops},
+            "track_general_entry_level": {"points": entry_track_score, "matched": entry_kw + entry_title_hits},
+            "track_dev_security": {"points": dev_score, "matched": list(dev_kw)},
+            "dev_title_penalty": {"points": dev_title_penalty, "matched": is_dev_title},
+            "entry_level_bonus": {"points": entry_level_bonus, "matched": is_entry_level},
+            "senior_penalty": {
+                "points": senior_penalty,
+                "matched": {"senior_title": is_senior_title, "years_required": requires_years},
+            },
+            "management_penalty": {"points": management_penalty, "matched": list(management_matches)},
+            "remote_bonus": {"points": remote_score, "matched": is_remote},
+            "location_bonus": {"points": location_score, "reason": location_reason},
+            "car_penalty": {"points": car_penalty, "matched": requires_car},
+            "degree_penalty": {"points": degree_penalty, "matched": requires_degree},
+            "norwegian_fluency_penalty": {"points": language_penalty, "matched": requires_norwegian_fluency},
+            "occupation_category_bonus": {
+                "points": category_bonus + category_penalty, "matched": sorted(category_l1),
+            },
+            "phone_support_penalty": {"points": phone_penalty, "matched": is_phone_support},
+            "relocation_worthiness_penalty": {
+                "points": relocation_penalty,
+                "matched": {"low_extent": low_extent, "short_vikariat": short_vikariat},
+            },
+            "formal_qualification_penalty": {
+                "points": formal_qualification_penalty, "matched": requires_formal_qualification,
+            },
+            "programming_experience_penalty": {
+                "points": programming_experience_penalty, "matched": requires_programming_experience,
+            },
+            "context_gate": {"points": gate_points, "matched": not relevant},
+        }
+
+        base = 10
+        total = base + sum(v["points"] for v in breakdown.values())
+        total = max(0, min(100, total))
+        breakdown["base"] = base
+        breakdown["total"] = total
+        results[profile] = (total, breakdown)
+
+    return results
 
 
 # Only trusted when "kr"/"kr." directly precedes the figure — a bare 6-digit
@@ -1115,18 +1222,12 @@ def rescore_one(conn, uuid: str) -> dict | None:
     is_excluded, reason = check_exclusion(row["title"], plain_description, row["county"], extent_pct)
     db.set_exclusion(conn, uuid, is_excluded, reason)
 
-    score, breakdown = score_vacancy(
+    (score, breakdown), (score_it, breakdown_it) = score_both_profiles(
         row["title"], description, row["municipal"], row["county"], language,
-        row["occupation_categories"], profile="warehouse",
-        extent_percent=extent_pct, engagement_type=row["engagement_type"],
+        row["occupation_categories"], extent_percent=extent_pct,
+        engagement_type=row["engagement_type"], plain_description=plain_description,
     )
     db.set_score(conn, uuid, score, breakdown)
-
-    score_it, breakdown_it = score_vacancy(
-        row["title"], description, row["municipal"], row["county"], language,
-        row["occupation_categories"], profile="it",
-        extent_percent=extent_pct, engagement_type=row["engagement_type"],
-    )
     db.set_score_it(conn, uuid, score_it, breakdown_it)
 
     return {"score": score, "score_it": score_it, "excluded": is_excluded, "exclusion_reason": reason}
@@ -1151,6 +1252,16 @@ def rescore_all(conn) -> dict:
     }
     excluded_count = 0
     all_candidates: list[dict] = []  # every scored row, for hard-block propagation + the dedup pass after
+    # The loop below only READS (rows were fetched up front, nothing in it
+    # queries the DB), so its writes are collected and applied in ONE
+    # transaction afterwards (db.apply_rescore_batch) - 2026-10-20: 36 498
+    # per-row commits were 2.4 s of fsync plus the per-call statement overhead.
+    # Side effect: an exception inside the loop now leaves the DB untouched
+    # instead of half-rescored.
+    borrowed_updates: list[tuple] = []
+    extent_updates: list[tuple] = []
+    salary_updates: list[tuple] = []
+    score_updates: list[tuple] = []
     for row in rows:
         description = row["description"]
         language = row["language"]
@@ -1180,7 +1291,7 @@ def rescore_all(conn) -> dict:
                 # unchanged ones, duplicating set_borrowed_description's own
                 # internal detection on the passes that did change).
                 language = db.detect_language(description)
-                db.set_borrowed_description(conn, row["uuid"], description, lender_uuid, language)
+                borrowed_updates.append((description, lender_uuid, language, row["uuid"]))
 
         plain_description = strip_html(description)
 
@@ -1191,7 +1302,7 @@ def rescore_all(conn) -> dict:
         # Cheap: a regex match against text already in memory.
         extent_pct = _parse_extent_percent(row["extent"], row["title"], plain_description)
         if extent_pct != row["extent_percent"]:
-            db.set_extent_percent(conn, row["uuid"], extent_pct)
+            extent_updates.append((extent_pct, row["uuid"]))
 
         salary = _parse_salary(plain_description)
         salary_min = _salary_min_value(salary)
@@ -1199,19 +1310,11 @@ def rescore_all(conn) -> dict:
         # added by migration and existing rows have salary_text but a NULL
         # salary_min) — not just when the text itself changed.
         if salary != row["salary_text"] or salary_min != row["salary_min"]:
-            db.set_salary_text(conn, row["uuid"], salary, salary_min)
+            salary_updates.append((salary, salary_min, row["uuid"]))
 
         is_excluded, reason = check_exclusion(row["title"], plain_description, row["county"], extent_pct)
-        db.set_exclusion(conn, row["uuid"], is_excluded, reason)
         if is_excluded:
             excluded_count += 1
-
-        score, breakdown = score_vacancy(
-            row["title"], description, row["municipal"], row["county"], language,
-            row["occupation_categories"], profile="warehouse",
-            extent_percent=extent_pct, engagement_type=row["engagement_type"],
-        )
-        db.set_score(conn, row["uuid"], score, breakdown)
 
         # Second profile, stored separately (score_it/score_it_breakdown) —
         # the "IT-support like before the warehouse retarget" toggle
@@ -1220,18 +1323,25 @@ def rescore_all(conn) -> dict:
         # of a cross-source duplicate is a structural fact about the
         # vacancy, not something that should flip depending on which
         # profile you're currently viewing.
-        score_it, breakdown_it = score_vacancy(
+        (score, breakdown), (score_it, breakdown_it) = score_both_profiles(
             row["title"], description, row["municipal"], row["county"], language,
-            row["occupation_categories"], profile="it",
-            extent_percent=extent_pct, engagement_type=row["engagement_type"],
+            row["occupation_categories"], extent_percent=extent_pct,
+            engagement_type=row["engagement_type"], plain_description=plain_description,
         )
-        db.set_score_it(conn, row["uuid"], score_it, breakdown_it)
+        score_updates.append((
+            1 if is_excluded else 0, reason,
+            score, json.dumps(breakdown, ensure_ascii=False),
+            score_it, json.dumps(breakdown_it, ensure_ascii=False),
+            row["uuid"],
+        ))
 
         all_candidates.append({
             "uuid": row["uuid"], "score": score, "source": row["source"],
             "key": _dedup_key(row["business_name"], row["title"], row["municipal"]),
             "excluded": is_excluded, "reason": reason, "user_status": row["user_status"],
         })
+
+    db.apply_rescore_batch(conn, borrowed_updates, extent_updates, salary_updates, score_updates)
 
     user_status_synced = _propagate_user_status_across_group(conn, all_candidates)
     excluded_count += _propagate_hard_blocks_across_group(conn, all_candidates)

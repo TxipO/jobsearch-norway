@@ -915,3 +915,29 @@ def test_bare_driftstekniker_and_body_mentions_are_not_target_titles():
     assert bd["track_it_support"]["points"] == 0
     _, bd = _score("Lærling", "Du vil jobbe i team sammen med ikt-tekniker.", profile="it")
     assert bd["track_it_support"]["points"] == 0
+
+
+def test_score_both_profiles_equals_two_score_vacancy_calls():
+    """rescore_all shares the profile-independent work between the two
+    profiles (2026-10-20); the result - including the stored JSON key order -
+    must be exactly what two separate score_vacancy calls give."""
+    import json
+
+    from db import strip_html
+    from scoring import score_both_profiles
+
+    cases = [
+        ("IT-tekniker", "<p>Kvalifikasjoner:</p><ul><li>Fagbrev kreves</li><li>3 års erfaring</li>"
+         "<li>Du må ha førerkort</li></ul><p>Flytende norsk. Personalansvar. Erfaring med programmering.</p>",
+         "SOGNDAL", "VESTLAND", "no", '[{"level1": "IT", "level2": "Drift, vedlikehold"}]', 50, "Vikariat"),
+        ("Lagermedarbeider", "Vi søker en lagermedarbeider til logistikk. Hybrid arbeid.", "BERGEN", None, "en",
+         '[{"level1": "Transport og lager"}]', None, None),
+        (None, None, None, None, None, None, None, None),
+    ]
+    for title, desc, mun, county, lang, cats, extent, eng in cases:
+        for given_plain in (None, strip_html(desc)):
+            wh, it = score_both_profiles(title, desc, mun, county, lang, cats, extent, eng, given_plain)
+            for got, profile in ((wh, "warehouse"), (it, "it")):
+                want = score_vacancy(title, desc, mun, county, lang, cats, profile, extent, eng)
+                assert got == want
+                assert json.dumps(got[1]) == json.dumps(want[1])
