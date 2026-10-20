@@ -206,7 +206,7 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 
 
 BACKUP_DIR = Path(__file__).parent / "data" / "backups"
-BACKUP_KEEP = 30  # ~1/day if run once per sync — plenty to recover a mistake from
+BACKUP_KEEP = 10  # one per sync; was 30 (5.1 GB of 180 MB copies), the last 10 syncs are plenty to recover a mistake from
 
 
 def backup_db(db_path: Path = DB_PATH, backup_dir: Path = BACKUP_DIR, keep: int = BACKUP_KEEP) -> Path | None:
