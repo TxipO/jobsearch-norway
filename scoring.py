@@ -1265,6 +1265,7 @@ def rescore_all(conn) -> dict:
     for row in rows:
         description = row["description"]
         language = row["language"]
+        detected = False
 
         # finn.no and linkedin rows never have a real description of their
         # own (see finn_client.py / linkedin_client.py) — borrow one from a
@@ -1292,6 +1293,15 @@ def rescore_all(conn) -> dict:
                 # internal detection on the passes that did change).
                 language = db.detect_language(description)
                 borrowed_updates.append((description, lender_uuid, language, row["uuid"]))
+                detected = True
+        if language is None and description and not detected:
+            # A NULL language next to a real description is "never detected" (the
+            # digest-upsert bug, db.upsert_vacancy_row, 2026-10-22, wiped it for
+            # borrowed descriptions and nothing re-detected it while the borrowed
+            # text stayed the same). Heal it here; only such rows pay for it.
+            language = db.detect_language(description)
+            if language is not None:
+                borrowed_updates.append((description, row["description_borrowed_from"], language, row["uuid"]))
 
         plain_description = strip_html(description)
 

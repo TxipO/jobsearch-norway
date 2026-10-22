@@ -202,3 +202,53 @@ def test_detail_page_shows_borrowed_notice_when_lender_is_gone(tmp_path, monkeyp
     html = page()
     assert "borrowed-notice" in html
     assert "яке вже закрите" in html
+
+
+ENGLISH_NAV_DESCRIPTION = (
+    "We are looking for a motivated warehouse employee to join our team in Bergen. "
+    "The position includes picking, packing and shipping of goods, as well as "
+    "daily contact with our customers and suppliers. We offer a good working environment."
+)
+
+
+def test_digest_reupsert_keeps_language_of_borrowed_description(tmp_path):
+    """Regression 2026-10-22: a finn/LinkedIn digest row upserts description=None
+    on every sync, and `language = excluded.language` reset the language
+    detected for the borrowed description to NULL (98 of 101 live finn rows)."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "Selger", "Acme AS", "Bergen", description=ENGLISH_NAV_DESCRIPTION)
+    _insert(conn, "finn-1", "finn", "Selger", "Acme AS", "Bergen", description=None)
+    rescore_all(conn)
+    assert db.get_vacancy(conn, "finn-1")["language"] == "en"
+
+    _insert(conn, "finn-1", "finn", "Selger", "Acme AS", "Bergen", description=None)  # the next digest read
+
+    row = db.get_vacancy(conn, "finn-1")
+    assert row["language"] == "en"
+    assert row["description"] == ENGLISH_NAV_DESCRIPTION  # COALESCE already protected this
+
+
+def test_digest_reupsert_keeps_manually_set_sector(tmp_path):
+    conn = _make_conn(tmp_path)
+    db.upsert_vacancy_row(
+        conn, {"uuid": "linkedin-1", "title": "Selger", "sector": "Privat"}, source="linkedin",
+    )
+    db.upsert_vacancy_row(conn, {"uuid": "linkedin-1", "title": "Selger", "sector": None}, source="linkedin")
+    assert db.get_vacancy(conn, "linkedin-1")["sector"] == "Privat"
+
+
+def test_rescore_heals_null_language_on_row_with_description(tmp_path):
+    """The ~100 rows already wiped must come back on the next rescore even though
+    their borrowed description is unchanged."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "Selger", "Acme AS", "Bergen", description=ENGLISH_NAV_DESCRIPTION)
+    _insert(conn, "finn-1", "finn", "Selger", "Acme AS", "Bergen", description=None)
+    rescore_all(conn)
+    conn.execute("UPDATE vacancies SET language = NULL WHERE uuid IN ('finn-1', 'nav-1')")
+    conn.commit()
+
+    rescore_all(conn)
+
+    assert db.get_vacancy(conn, "finn-1")["language"] == "en"
+    assert db.get_vacancy(conn, "finn-1")["description_borrowed_from"] == "nav-1"
+    assert db.get_vacancy(conn, "nav-1")["language"] == "en"

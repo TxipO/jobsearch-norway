@@ -454,8 +454,15 @@ def upsert_vacancy_row(
     per-row commit.
 
     The language is re-detected only for a new row or a changed description
-    (see _language_if_description_unchanged); a source without a description
-    (finn.no, LinkedIn) is unaffected - detect_language(None) stays None."""
+    (see _language_if_description_unchanged). A source without a description
+    (finn.no, LinkedIn) upserts description=None, so its language is KEPT
+    (the CASE on excluded.description): the stored value belongs to the
+    borrowed description (scoring.rescore_all), and excluded.language is
+    always NULL there - plain `language = excluded.language` wiped it on every
+    sync (2026-10-22: 98 of 101 finn rows with a borrowed description and 4
+    of 13 LinkedIn ones had language NULL, so English ones lost the language
+    bonus and the language filter). sector gets the COALESCE too: a manual
+    add's 'Privat' was reset by the next digest re-read."""
     if is_dismissed(conn, row["uuid"]):
         if not ignore_dismissed:
             return False
@@ -488,8 +495,8 @@ def upsert_vacancy_row(
             link = excluded.link,
             engagement_type = COALESCE(NULLIF(excluded.engagement_type, ''), engagement_type),
             extent = COALESCE(NULLIF(excluded.extent, ''), extent),
-            sector = excluded.sector,
-            language = excluded.language,
+            sector = COALESCE(excluded.sector, sector),
+            language = CASE WHEN excluded.description IS NULL THEN language ELSE excluded.language END,
             last_synced_at = datetime('now')
         """,
         (
