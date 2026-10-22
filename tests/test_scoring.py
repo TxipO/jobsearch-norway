@@ -1058,3 +1058,47 @@ def test_sogn_place_name_is_local_for_the_relocation_penalty():
     _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal="Fyllingsdalen", county="Vestland",
                    extent_percent=50)
     assert bd["relocation_worthiness_penalty"]["points"] == -40
+
+
+def test_lead_is_a_role_word_not_the_verb():
+    """2026-10-22: "lead " matched "Want to lead multidisciplinary engineering…" /
+    "Ready to lead some of Elkem's …" and, needing a trailing space, missed a
+    title-final Lead ("Information Security Lead", "Category Planning Lead")."""
+    for title in ("Information Security Lead", "Category Planning Lead", "Lead Engineer", "Tech Lead (hands-on)",
+                  "Avdelingsleiar SFO - Ytre Arna skule", "Avdelingsleiar psykisk helseteam"):
+        _, bd = _score(title, "<p>Vi søker deg.</p>")
+        assert bd["senior_penalty"]["matched"]["senior_title"] is True, title
+    for title in ("Want to lead multidisciplinary engineering in robotics?", "Ready to lead some of Elkem's projects?",
+                  "Misleading title", "Leadership program"):
+        _, bd = _score(title, "<p>Vi søker deg.</p>")
+        assert bd["senior_penalty"]["matched"]["senior_title"] is False, title
+
+
+def test_title_whitespace_is_normalised_like_hard_blocks():
+    """2026-10-22: scoring only .lower()-ed the title while hard_blocks uses
+    normalize_text; a non-breaking/double space defeated multi-word keywords."""
+    for title in ("Team\xa0Lead til prosjekt", "Team  Lead til prosjekt", "IT\xa0support"):
+        _, bd = _score(title, "<p>Vi søker deg.</p>", profile="it")
+        if "lead" in title.lower():
+            assert bd["senior_penalty"]["matched"]["senior_title"] is True, repr(title)
+        else:
+            assert bd["track_it_support"]["matched"] == ["it support"], repr(title)
+
+
+def test_vikariat_two_year_and_long_month_forms_count_as_long():
+    """2026-10-22: "100 % vikariat i to år" and "80% stilling i 2 år" (live) were
+    charged the short-vikariat relocation penalty; the nearby noise forms must not
+    count ("binding i 2 år i denne stillingen", "minst 2 års erfaring")."""
+    def short(desc):
+        _, bd = _score("Konsulent", desc, municipal="Oslo", county="Oslo", extent_percent=100,
+                       engagement_type="Vikariat")
+        return bd["relocation_worthiness_penalty"]["matched"]["short_vikariat"]
+
+    assert short("<p>Vi søker fagkonsulent til 100 % vikariat i to år.</p>") is False
+    assert short("<p>Det er en 80% stilling i 2 år.</p>") is False
+    assert short("<p>Et 2 års vikariat som seniorrådgiver.</p>") is False
+    assert short("<p>Engasjementet varer i 24 måneder.</p>") is False  # "engasjement" + 24 måneder
+    assert short("<p>Bonus ved binding i 2 år i denne stillingen.</p>") is True
+    assert short("<p>Stillingen krever minst 2 års erfaring.</p>") is True
+    assert short("<p>Vi har barn fra 1-2 år og stillingen er ledig.</p>") is True
+    assert short("<p>Vi søker en vikar.</p>") is True

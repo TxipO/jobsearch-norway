@@ -14,6 +14,7 @@ import re
 
 from db import strip_html
 from hard_blocks import REQUIREMENT_VERB_RE, has_optional_marker, iter_requirement_clauses
+from textnorm import normalize_text
 
 # --- Track A: IT-support / helpdesk / servicedesk --------------------------
 # Backed by 3+ years of real experience (Verna, PUMB, freelance repair).
@@ -196,9 +197,19 @@ ENTRY_LEVEL_TITLE_KEYWORDS = ["junior", "trainee"]
 # (not the full body) to avoid false positives from unrelated mentions of
 # "senior management" etc. elsewhere in the ad text.
 SENIOR_TITLE_KEYWORDS = [
-    "senior", "lead ", "teamlead", "team lead", "avdelingsleder",
+    "senior", "teamlead", "team lead", "avdelingsleder",
+    # Nynorsk twin (2026-10-22): 8 visible "Avdelingsleiar ..." titles took no penalty.
+    "avdelingsleiar",
     "erfaren ",
 ]
+# "lead" as a ROLE word. The old substring "lead " matched the verb ("Want to
+# lead multidisciplinary engineering…", "Ready to lead some of Elkem's most
+# important projects?") and, needing a trailing space, missed a title-final Lead
+# (measured 2026-10-22 on 24 visible titles: "Information Security Lead",
+# "Category Planning Lead", "Quality & Risk Lead", "System Integration Lead",
+# "Activation Lead" took no penalty; 2 verb uses did). `(?<!\bto )` is the only
+# verb form seen live.
+SENIOR_LEAD_RE = re.compile(r"(?<!\bto )\blead\b")
 # Management titles that carry no penalty keyword above (2026-10-18). Measured on
 # the live corpus (7605 visible): "head of" 10 titles, "...sjef" 163, a title
 # STARTING with leder/leiar/ledar 34, "vil du lede" 76 — every one a line-
@@ -615,7 +626,17 @@ VIKARIAT_LONG_DURATION_RE = re.compile(
     r"(?:vikariat|engasjement|stilling(?:en)?|kontrakt)\D{0,20}(?:i |på |for )?"
     r"(?:(?:ett|1|12)\s*(?:-årig|års?)|1[2-9]\s*måneder|(?:1[2-9]|[2-9]\d)\s*måneders)|"
     r"(?:(?:ett|1|12)\s*(?:-årig|års?)|1[2-9]\s*måneder|(?:1[2-9]|[2-9]\d)\s*måneders)"
-    r"\D{0,20}(?:vikariat|engasjement|stilling(?:en)?|kontrakt)"
+    r"\D{0,20}(?:vikariat|engasjement|stilling(?:en)?|kontrakt)|"
+    # 2026-10-22: "to år"/"2 år" and "NN måneder" (20+; only the genitive was
+    # listed) were missing. Deliberately TIGHTER than the forms above because a bare
+    # "2 år" is common noise ("binding i 2 år i denne stillingen", "minst 2 år",
+    # "barn fra 1-2 år og stillingen"): the word must sit right next to the
+    # engagement noun. Live vikariat rows gained: "100 % vikariat i to år"
+    # (Fagkonsulent), "80% stilling i 2 år" x2 (Prosjektleder); "24 måneder" has
+    # no live row, 0 false positives in the 11.7k-row scan.
+    r"(?:vikariat|engasjement|stilling(?:en)?|kontrakt)\s+(?:i|på|for)\s+(?:to|2)\s*år\b|"
+    r"\b(?:to|2)\s*(?:-årig|års?)\s+(?:vikariat|engasjement|stilling(?:en)?|kontrakt)|"
+    r"(?:vikariat|engasjement|stilling(?:en)?|kontrakt)\D{0,20}(?:i |på |for )?(?:2\d|[3-9]\d)\s*måneder\b"
 )
 
 DEGREE_REQUIRED_PATTERNS = [
@@ -846,7 +867,11 @@ def _score_profiles(
     """Everything that does not depend on the profile is computed once at the
     top; the loop at the bottom only assembles the per-profile breakdown, in the
     same key order score_vacancy() has always produced."""
-    title_l = (title or "").lower()
+    # normalize_text like hard_blocks.check_exclusion does for the same title: 219
+    # live titles carry a non-breaking or double space ("Lager\xa0medarbeider")
+    # that made multi-word keywords ("team lead", "it support") miss here while
+    # the hard block saw them (2026-10-22).
+    title_l = normalize_text(title).lower()
     if plain_description is None:
         plain_description = strip_html(description_html)
     text = f"{title_l} {plain_description}".lower()
@@ -953,7 +978,11 @@ def _score_profiles(
     )
     entry_level_bonus = 12 if is_entry_level else 0
 
-    is_senior_title = any(kw in title_l for kw in SENIOR_TITLE_KEYWORDS) or bool(MANAGEMENT_TITLE_RE.search(title_l))
+    is_senior_title = (
+        any(kw in title_l for kw in SENIOR_TITLE_KEYWORDS)
+        or bool(SENIOR_LEAD_RE.search(title_l))
+        or bool(MANAGEMENT_TITLE_RE.search(title_l))
+    )
     requires_years = bool(
         _firm_pattern_matches(text, YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True, clauses=clauses)
     )
