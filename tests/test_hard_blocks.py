@@ -905,3 +905,68 @@ def test_softener_for_another_claim_does_not_cancel_the_clearance_block():
     # ... while a softener in the match's own segment keeps unblocking.
     assert not check_exclusion("Systemutvikler", "Sikkerhetsklarering på nivå hemmelig er ønskelig, men ikke et krav.")[0]
     assert not check_exclusion("Systemutvikler", "Det er en fordel å inneha sikkerhetsklarering.")[0]
+
+
+import pytest  # noqa: E402
+
+# 2026-10-22 live-corpus sweep: compound / Nynorsk / plural title gaps. Every
+# title below was visible and unblocked before the widening.
+_NEWLY_BLOCKED_TITLES = [
+    # teachers (compounds the \blærer\b anchor missed)
+    "Kontaktlærer på småtrinnet", "Grunnskolelærer 1.-7. trinn", "Norsklærer på 7.-10. trinn",
+    "Faglærer", "Tilkallingsvikarer - grunnskolelærer", "Kulturskulelærar - Lavik",
+    "Yrkesfaglærar, Teknologi og Industrifag", "Musikklærar ved Jondal skule", "Trasop skole - faglærere",
+    "Fast lærerstilling", "Lærarstilling - tidsavgrensa", "Museumslektor - Historisk museum",
+    "Allaskuvlalektor davvisámegiela", "Høyskolelektor innen administrative fag",
+    # health
+    "Tannlegar og tannpleiarar", "Spesialergoterapeut", "Kommunefysioterapeut",
+    "Tenner & Trivsel søker engasjert assistenttannlege!", "Barnelege søkes til skjærgården", "Sjefslege",
+    "WRK Medic søker leger!",
+    # legal (Nynorsk)
+    "Høgskulen på Vestlandet har ledig to 100% vikariat som juridisk rådgjevar",
+    # hairdresser compound
+    "Tilkallingsfrisør – 550 kr/timen",
+    # maritime / driving instructors (licence)
+    "Skipper (D5) – Fast stilling i passasjerdrift", "Båtførar i Skjærgårdstjenesten", "Maskinpasser",
+    "Motormann/Maskinpasser søkes!", "Sjøvakt 2:2 turnus", "Pumpemann til Ro-Ro / Multi-Purpose fartøy",
+    "Førstemaskinist", "Andremaskinist til skoleskipet MS Lofoten!",
+    "Skipsførar til hurtigbåtane Bergen – Nordfjord – Sogn", "Trafikklærer klasse B", "Engasjerte trafikklærere søkes",
+    "Bli med på laget - vi søkjer to trafikklærarar!",
+]
+
+# Look-alikes measured in the same sweep and deliberately NOT blocked.
+_STILL_VISIBLE_TITLES = [
+    "Hundefrisør-Fast stilling hos Hunter Spa & Grooming", "Hunde- og kattefrisør søkes",  # pet groomers
+    "Kostholdspedagog", "Kateket / menighetspedagog",                    # \bpedagog stays narrow
+    "Giverservice hos Stiftelsen Norsk Luftambulanse",                   # ambulanse stays narrow
+    "Etterforsker", "Etterforsker - seksuelle overgrep",                 # forsker stays narrow
+    "Vil du jobbe i et team som daglege ved en av Norges største legevakter?",  # bare "lege\b" rejected
+    "Verver for Leger Uten Grensers julekampanje",                       # employer name
+    "Tannlegeassistent vikariat", "Lærerassistenter (deltid) til skole og AKS/SFO søkes.",
+    "Vi lærer deg opp som lagermedarbeider", "Solfanger kollektor selger",
+    "Lagermedarbeider", "IT-konsulent",
+]
+
+
+@pytest.mark.parametrize("title", _NEWLY_BLOCKED_TITLES)
+def test_compound_and_nynorsk_title_gaps_blocked(title):
+    assert check_exclusion(title, "")[0], title
+
+
+@pytest.mark.parametrize("title", _STILL_VISIBLE_TITLES)
+def test_compound_widening_lookalikes_not_blocked(title):
+    assert not check_exclusion(title, "")[0], title
+
+
+def test_trafikklaerer_is_a_licence_block_not_a_teaching_block():
+    """A driving instructor is not a K-12 teacher; the reason must say licence."""
+    _, reason = check_exclusion("Trafikklærer klasse B", "")
+    assert "права" in reason
+    _, reason = check_exclusion("Kontaktlærer", "")
+    assert "педагогічна" in reason
+
+
+def test_new_lecturer_titles_are_academic_not_pedagogical():
+    for title in ("Museumslektor - Historisk museum", "Allaskuvlalektor davvisámegiela", "Høyskolelektor innen fag"):
+        _, reason = check_exclusion(title, "")
+        assert "PhD" in reason, title

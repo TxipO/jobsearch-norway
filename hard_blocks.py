@@ -61,8 +61,18 @@ HEALTH_TITLE_PATTERNS = [
     r"allmennlege", r"turnuslege",
     # (?!assistent): "Tannlegeassistent" is unauthorised support work
     # (2026-10-05, /fullreview deep) — unlike tannpleier/tannhelsesekretær.
-    r"\btannlege(?!assistent)", r"\btannpleier", r"\btannhelsesekret",
-    r"\bfysioterapeut", r"\bergoterapeut",
+    r"tannlege(?!assistent)", r"\btannpleier", r"\btannhelsesekret",
+    r"fysioterapeut", r"ergoterapeut",
+    # 2026-10-22 compound/Nynorsk/plural gaps, each read on the live titles
+    # (all genuine authorisation-gated roles, 0 false positives except the one
+    # guarded): "Tannlegar og tannpleiarar" (Nynorsk plurals), "Assistenttannlege"
+    # (a licensed dentist, unlike tannlegeassistent), "Spesialergoterapeut" x3 and
+    # kommunefysioterapeut (the \b on -terapeut hid compounds), "Barnelege",
+    # "Sjefslege" x2, Bokmål plural "leger" ("WRK Medic søker leger!") - but never
+    # "Leger Uten Grenser" (employer). Bare "lege\b" was measured and REJECTED:
+    # it also hits "daglege" ("team som daglege ved en av Norges største
+    # legevakter"), so only these explicit words.
+    r"tannlegar", r"tannpleiar", r"barnelege", r"sjefslege", r"\bleger\b(?! uten grenser)",
     # jordmor/psykolog/farmasøyt/bioingeniør dropped their leading \b
     # 2026-08-30 (/fullreview deep, Stage 4) — same compound-word reasoning
     # as sykepleier above. Missed live: avdelingsjordmor, ultralydjordmor,
@@ -95,8 +105,17 @@ TEACHING_TITLE_PATTERNS = [
     # and deg/dem/opp/bort follows. Deliberately NOT exempting a bare
     # "lærer på ..." — that is the real noun title ("Lærer på ungdomstrinnet")
     # and must stay blocked.
-    r"(?<!\bvi )(?<!\bdu )(?<!\bde )(?<!\bman )\blærer\b(?!\s+(?:deg|dem|opp|bort)\b)",
-    r"\blærar\b", r"\blærere\b", r"\blærarar\b",
+    # 2026-10-22: no leading \b so compounds are caught - kontaktlærer, faglærer,
+    # norsklærer, grunnskolelærer, musikklærer, yrkesfaglærer, Nynorsk
+    # kulturskulelærar/yrkesfaglærar (37 live titles, every one a school/music/
+    # dance teacher; the pattern already blocked "Lærer i IKT", so an IT-teacher
+    # post is not a new case). trafikklærer/kjørelærer are a different profession
+    # (driving instructor) and handled as a LICENCE block below instead.
+    r"(?<!trafikk)(?<!kjøre)(?<!\bvi )(?<!\bdu )(?<!\bde )(?<!\bman )lærer\b(?!\s+(?:deg|dem|opp|bort)\b)",
+    r"(?<!trafikk)(?<!kjøre)lærar\b", r"(?<!trafikk)(?<!kjøre)lærere\b", r"(?<!trafikk)(?<!kjøre)lærarar\b",
+    # "Lærerstillinger Manglerud skole", "Fast lærerstilling", Nynorsk
+    # "Lærarstilling", "Ingeniør innen Automasjon søkes til lærerstilling" (7 live).
+    r"lærerstilling", r"lærarstilling",
     r"\blærervikar", r"\blærarvikar",
     r"\badjunkt", r"\blektor",
     r"\bbarnehagelærer", r"\bbarnehagelærar",
@@ -129,6 +148,13 @@ ACADEMIC_TITLE_PATTERNS = [
     # unreachable. 26 live titles measured, all genuine academic posts.
     r"universitetslektor", r"høgskolelektor", r"førstelektor",
     r"universitetslærer", r"høgskolelærer",
+    # 2026-10-22, three lecturer posts that slipped through (academic, not K-12:
+    # they belong here and not in TEACHING_TITLE_PATTERNS' bare \blektor, which
+    # would also mislabel them): Bokmål "Høyskolelektor innen administrative fag"
+    # (HVL; only the Nynorsk "høgskole" forms were listed), "Museumslektor" x2
+    # (UiO), "Allaskuvlalektor" x2 (Sámi allaskuvla). A bare "lektor" substring
+    # was rejected: "kollektor" is a solar/pipe collector.
+    r"høyskolelektor", r"høyskolelærer", r"museumslektor", r"allaskuvlalektor",
 ]
 
 # Skilled trades gated behind a Norwegian fagbrev / certificate of
@@ -156,7 +182,10 @@ TRADE_TITLE_PATTERNS = [
     # frisør KEEPS its leading \b — unlike the others above, its compound
     # false-positive is real: "hunde- og kattefrisør" (pet groomer) is a
     # different profession entirely, not the same hairdressing fagbrev.
-    r"\bfrisør",
+    # 2026-10-22: "Tilkallingsfrisør" (a hairdresser) slipped through the bare \b;
+    # a lookbehind keeps the pet groomers exempt instead (hundefrisør x4 live,
+    # "hunde- og kattefrisør").
+    r"(?<!hunde)(?<!katte)(?<!dyre)frisør",
     # kranfører dropped its leading \b 2026-08-30 (/fullreview deep, Stage
     # 4) — "tårnkranfører" (tower-crane operator) was missed; checked, 0
     # false positives.
@@ -209,10 +238,19 @@ ENGINEERING_TITLE_PATTERNS = [
 # was a genuine driving role).
 LICENCE_TITLE_PATTERNS = [
     r"sjåfør", r"sjåfor",
-    r"\bstyrmann", r"\boverstyrmann", r"\bmaskinist", r"\bskipsfører",
+    r"\bstyrmann", r"\boverstyrmann", r"maskinist", r"\bskipsfører",
     # matros dropped its leading \b same pass — "lettmatros" (ordinary/
     # junior seaman) was missed; checked, 0 false positives.
     r"matros", r"\bkaptein", r"\bmaskinsjef",
+    # 2026-10-22, live titles (all passenger/ferry/cargo vessel crew, scored 25-35
+    # in the warehouse profile via NAV "Transport og lager"): "Skipper (D5)" x2,
+    # "Båtførar", "Maskinpasser" x3 (incl. "Motormann/Maskinpasser"), "Sjøvakt" x3,
+    # "Pumpemann til Ro-Ro", "Skipsførar til hurtigbåtane" (the Nynorsk twin of
+    # skipsfører) and, with the leading \b dropped, "Førstemaskinist"/"Andremaskinist".
+    r"skipper", r"båtfør", r"maskinpasser", r"sjøvakt", r"pumpemann", r"skipsførar",
+    # Driving instructors need the very licence the user does not have: 5 live
+    # "Trafikklærer(e/ar)" ads (the teacher patterns above exempt them).
+    r"trafikklærer", r"trafikklærar",
 ]
 
 # Regulated legal/finance professions.
@@ -238,6 +276,8 @@ LEGAL_FINANCE_TITLE_PATTERNS = [
     # (workplace name) and "juridiske fag" (subject-matter descriptor on a
     # librarian role), neither of which requires a law degree themselves.
     r"juridisk rådgiver", r"juridiske rådgivere",
+    # Nynorsk, 2026-10-22: "juridisk rådgjevar" (HVL, 2 vikariat posts).
+    r"juridisk rådgjevar", r"juridiske rådgjevarar",
     # "rådgiver juridisk" (reversed word order, e.g. "Rådgiver juridisk
     # (vikariat)") also needs the negative lookahead — without it, this
     # matches the SAME false-positive shape the comment above warns about,
