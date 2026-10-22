@@ -765,7 +765,7 @@ def iter_scorable_vacancies(conn: sqlite3.Connection, active_only: bool = True):
     return conn.execute(
         f"SELECT uuid, title, description, municipal, county, language, extent_percent, extent, "
         f"salary_text, salary_min, business_name, source, description_borrowed_from, user_status, "
-        f"occupation_categories, engagement_type FROM vacancies {where}"
+        f"occupation_categories, engagement_type FROM vacancies {where} ORDER BY uuid"
     ).fetchall()
 
 

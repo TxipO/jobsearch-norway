@@ -1175,8 +1175,18 @@ def _build_description_lender_lookup(rows) -> dict[tuple, tuple[str, str]]:
     job-alert digest emails carry title/employer/location only, no
     description, and we deliberately don't fetch linkedin.com job pages to
     fill it in (ban risk to the user's real profile, see linkedin_client.py's
-    own docstring)."""
+    own docstring).
+
+    Several lenders can share one key (live 2026-10-22: 411 active keys, 7 of
+    them reached by a finn/LinkedIn row, with DIFFERING texts - e.g. a NAV and
+    a Jobbnorge copy, or two NAV ads of one employer). The old last-write-wins
+    loop followed the order of an unordered SELECT, so which text a finn row
+    borrowed - and thus its score - could flip between runs (same class as the
+    2026-08-15 dedup tie-break bug). The winner is now a pure function of the
+    data: NAV before Jobbnorge, then the longest description, then the
+    smallest uuid; input order no longer matters."""
     lookup: dict[tuple, tuple[str, str]] = {}
+    rank: dict[tuple, tuple] = {}
     for row in rows:
         if row["source"] not in ("nav", "jobbnorge"):
             continue
@@ -1184,7 +1194,10 @@ def _build_description_lender_lookup(rows) -> dict[tuple, tuple[str, str]]:
         if not description or len(strip_html(description)) < _LENDABLE_DESCRIPTION_MIN_LEN:
             continue
         key = _dedup_key(row["business_name"], row["title"], row["municipal"])
-        lookup[key] = (row["uuid"], description)
+        this_rank = (row["source"] != "nav", -len(description), row["uuid"])
+        if key not in rank or this_rank < rank[key]:
+            rank[key] = this_rank
+            lookup[key] = (row["uuid"], description)
     return lookup
 
 

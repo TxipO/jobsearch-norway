@@ -252,3 +252,38 @@ def test_rescore_heals_null_language_on_row_with_description(tmp_path):
     assert db.get_vacancy(conn, "finn-1")["language"] == "en"
     assert db.get_vacancy(conn, "finn-1")["description_borrowed_from"] == "nav-1"
     assert db.get_vacancy(conn, "nav-1")["language"] == "en"
+
+
+def _lender_rows():
+    base = {"business_name": "Acme AS", "title": "Selger", "municipal": "Bergen"}
+    long_a = LONG_NAV_DESCRIPTION
+    long_b = LONG_NAV_DESCRIPTION + " Tillegg: du får også ansvar for opplæring av nye medarbeidere."
+    return [
+        {**base, "uuid": "jobbnorge-9", "source": "jobbnorge", "description": long_b},
+        {**base, "uuid": "nav-b", "source": "nav", "description": long_a},
+        {**base, "uuid": "nav-a", "source": "nav", "description": long_a},
+        {**base, "uuid": "nav-c", "source": "nav", "description": long_b},
+    ]
+
+
+def test_lender_choice_does_not_depend_on_row_order():
+    """Review 2026-10-22: last-write-wins over an unordered SELECT flipped which
+    description a finn/LinkedIn row borrowed between runs (live: 411 active keys
+    with differing lender texts, 7 reaching a finn/LinkedIn row)."""
+    import itertools
+    rows = _lender_rows()
+    results = {
+        tuple(sorted(_build_description_lender_lookup(list(p)).items()))
+        for p in itertools.permutations(rows)
+    }
+    assert len(results) == 1
+
+
+def test_lender_choice_prefers_nav_then_longest_then_smallest_uuid():
+    rows = _lender_rows()
+    (uuid, description), = _build_description_lender_lookup(rows).values()
+    assert uuid == "nav-c"  # NAV beats the Jobbnorge row; of nav-a/b/c the longest text wins
+    assert description == rows[3]["description"]
+    # same length: smallest uuid
+    (uuid, _), = _build_description_lender_lookup([r for r in rows if r["uuid"] in ("nav-a", "nav-b")]).values()
+    assert uuid == "nav-a"
