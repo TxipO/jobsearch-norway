@@ -1,5 +1,6 @@
 import html
 import json
+import logging
 import re
 import sys
 import threading
@@ -28,6 +29,13 @@ import reachability
 import scoring
 from resume_prompt import build_resume_prompt
 from web.render import sanitize_description
+
+logger = logging.getLogger(__name__)
+# Under uvicorn nothing configures the root logger (it only sets up its own
+# "uvicorn*" loggers), so INFO from nav_client/jobbnorge_client and the
+# stage failures below would not reach the console. basicConfig is a no-op
+# when the root already has a handler (sync.py CLI, pytest), so no duplicates.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
 # When this process imported the app — health.stale_code() compares it with the
 # newest .py on disk to tell the user the running code is older than their edits.
@@ -513,7 +521,31 @@ def _safe_sync(source_fn, conn) -> dict:
     try:
         return source_fn(conn)
     except Exception as e:
-        return {"error": str(e)}
+        # No traceback used to be kept anywhere (web/app.py had no logger), and
+        # str(e) alone is often empty or cryptic (KeyError('uuid') -> "'uuid'").
+        name = getattr(source_fn, "__module__", None) or repr(source_fn)
+        logger.exception("Sync source %s failed", name)
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+def _safe_stage(name: str, fn, stage_errors: list, default=0, conn=None):
+    """Run one post-source stage of the sync (rescore, deletes, retirement,
+    auto-ignore, high-score count). A failure is logged with its traceback and
+    recorded in the summary's `stage_errors` (health.evaluate_sources shows it),
+    and the remaining stages still run - before, one exception here lost every
+    later stage AND the summary write, so the whole sync looked like it never
+    happened."""
+    try:
+        return fn()
+    except Exception as e:
+        logger.exception("Sync stage %s failed", name)
+        if conn is not None:
+            try:  # a half-applied stage must not be committed by the next stage's commit()
+                conn.rollback()
+            except Exception:
+                pass
+        stage_errors.append({"stage": name, "error": f"{type(e).__name__}: {e}"})
+        return default
 
 
 @app.post("/sync")
@@ -581,19 +613,25 @@ def _run_sync() -> dict:
     finn_stats = _safe_sync(finn_client.sync, conn)
     easycruit_stats = _safe_sync(easycruit_client.sync, conn)
     linkedin_stats = _safe_sync(linkedin_client.sync, conn)
-    scored = scoring.rescore_all(conn)
-    deleted_inactive = db.delete_inactive(conn)
-    deleted_expired = db.delete_expired_unreacted(conn)
-    deleted_archived = db.delete_archived(conn)
+    stage_errors: list[dict] = []
+    scored = _safe_stage("rescore", lambda: scoring.rescore_all(conn), stage_errors, default={}, conn=conn)
+    deleted_inactive = _safe_stage("delete_inactive", lambda: db.delete_inactive(conn), stage_errors, conn=conn)
+    deleted_expired = _safe_stage("delete_expired", lambda: db.delete_expired_unreacted(conn), stage_errors, conn=conn)
+    deleted_archived = _safe_stage("delete_archived", lambda: db.delete_archived(conn), stage_errors, conn=conn)
     # finn/LinkedIn rows are re-forced ACTIVE by every digest parse, so the
     # deletes above never reap them; retire untouched ones by age (2026-10-05).
-    retired_digest = db.retire_stale_digest_rows(conn)
-    auto_ignored = db.auto_ignore_stale_applications(conn)
-    new_high_score = (
-        db.count_new_high_score(
-            conn, prior_watermark_utc, NEW_HIGH_SCORE_THRESHOLD, score_profile=get_score_profile(conn),
-        )
-        if prior_watermark_utc else 0
+    retired_digest = _safe_stage("retire_digest", lambda: db.retire_stale_digest_rows(conn), stage_errors, conn=conn)
+    auto_ignored = _safe_stage("auto_ignore", lambda: db.auto_ignore_stale_applications(conn), stage_errors, conn=conn)
+    new_high_score = _safe_stage(
+        "new_high_score",
+        lambda: (
+            db.count_new_high_score(
+                conn, prior_watermark_utc, NEW_HIGH_SCORE_THRESHOLD, score_profile=get_score_profile(conn),
+            )
+            if prior_watermark_utc else 0
+        ),
+        stage_errors,
+        conn=conn,
     )
     summary = {
         "at": datetime.now().strftime("%d.%m.%Y %H:%M"),  # local time, display only
@@ -611,10 +649,17 @@ def _run_sync() -> dict:
         "auto_ignored": auto_ignored,
         "new_high_score": new_high_score,
         "backup_failed": backup_failed,
+        "stage_errors": stage_errors,
     }
-    db.set_state(conn, SYNC_STATE_KEY, json.dumps(summary, ensure_ascii=False))
-    if prior_watermark_utc:
-        db.set_state(conn, PREV_SYNC_AT_KEY, prior_watermark_utc)
+
+    def _write_summary():
+        db.set_state(conn, SYNC_STATE_KEY, json.dumps(summary, ensure_ascii=False))
+        if prior_watermark_utc:
+            db.set_state(conn, PREV_SYNC_AT_KEY, prior_watermark_utc)
+
+    # Last: if even this fails the caller still gets the summary (with the
+    # failure appended) instead of an exception that hides everything above.
+    _safe_stage("summary_write", _write_summary, stage_errors, conn=conn)
     return summary
 
 

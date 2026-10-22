@@ -86,6 +86,14 @@ def evaluate_sources(conn, summary: dict | None, now: datetime | None = None) ->
         if days >= SYNC_STALE_DAYS:
             issues.append(_issue("Sync", "warn", f"останній sync був {days:.0f} дн. тому — дані могли застаріти", "Натисни Sync now"))
 
+    # Post-source stages (rescore, deletions, retirement...) that raised: the sync
+    # carried on without them (web.app._safe_stage), so stale scores or a
+    # skipped cleanup would otherwise go unnoticed.
+    for err in summary.get("stage_errors") or []:
+        if isinstance(err, dict):
+            issues.append(_issue("Sync", "bad", f"етап «{err.get('stage')}» упав: {str(err.get('error'))[:160]}",
+                                 "Скажи Claude: подивитись трейсбек у консолі сервера"))
+
     for source, label, key in SOURCES:
         stats = summary.get(key) or {}
         if stats.get("error"):

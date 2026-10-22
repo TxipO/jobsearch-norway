@@ -191,3 +191,18 @@ def test_stale_code_ignores_non_python_files(tmp_path):
     css.write_text("a{}")
     os.utime(css, (3_000_000, 3_000_000))
     assert health.stale_code(started_at=2_000_000, root=tmp_path) is None
+
+
+def test_failed_sync_stage_is_reported(tmp_path):
+    """A rescore/delete/retire stage that raised no longer aborts the sync (web.app
+    _safe_stage) - so it must surface here or a broken stage runs unnoticed."""
+    summary = _summary(stage_errors=[{"stage": "rescore", "error": "RuntimeError: boom"}])
+    issues = health.evaluate_sources(_healthy_conn(tmp_path), summary, now=NOW)
+    assert len(issues) == 1
+    assert issues[0]["source"] == "Sync" and issues[0]["level"] == "bad"
+    assert "rescore" in issues[0]["message"] and "RuntimeError: boom" in issues[0]["message"]
+
+
+def test_empty_or_malformed_stage_errors_report_nothing(tmp_path):
+    for value in ([], None, ["junk"]):
+        assert health.evaluate_sources(_healthy_conn(tmp_path), _summary(stage_errors=value), now=NOW) == []

@@ -183,10 +183,11 @@ def test_sync_survives_nav_and_jobbnorge_failure_and_records_error(tmp_db, monke
 
     _stub_sync_pipeline(monkeypatch, nav=boom, jobbnorge=boom)
     summary = web_app.trigger_sync()
-    assert summary["stats"] == {"error": "NAV token expired"}
-    assert summary["jobbnorge"] == {"error": "NAV token expired"}
+    # The exception type is part of the message (str(KeyError('uuid')) is just "'uuid'").
+    assert summary["stats"] == {"error": "RuntimeError: NAV token expired"}
+    assert summary["jobbnorge"] == {"error": "RuntimeError: NAV token expired"}
     stored = json.loads(db.get_state(tmp_db, web_app.SYNC_STATE_KEY))
-    assert stored["stats"]["error"] == "NAV token expired"
+    assert stored["stats"]["error"] == "RuntimeError: NAV token expired"
     # The /sync route itself still redirects instead of 500ing.
     assert web_app.sync_route().status_code == 303
 
@@ -240,14 +241,65 @@ def test_concurrent_sync_is_rejected_then_next_runs(tmp_db, monkeypatch):
 def test_sync_lock_released_when_sync_raises(tmp_db, monkeypatch):
     _stub_sync_pipeline(monkeypatch)
 
+    def boom():
+        raise RuntimeError("no connection")
+
+    monkeypatch.setattr(web_app, "get_conn", boom)
+    with pytest.raises(RuntimeError):
+        web_app.trigger_sync()
+    monkeypatch.undo()
+    _stub_sync_pipeline(monkeypatch)
+    assert web_app.trigger_sync()["scored"] == 0
+
+
+def test_failing_source_is_logged_with_traceback_and_named(tmp_db, monkeypatch, caplog):
+    """web/app.py had no logger: a swallowed source failure left no trace."""
+    def boom(conn):
+        raise KeyError("uuid")
+
+    _stub_sync_pipeline(monkeypatch, nav=boom)
+    with caplog.at_level("ERROR", logger="web.app"):
+        summary = web_app.trigger_sync()
+    assert summary["stats"] == {"error": "KeyError: 'uuid'"}
+    rec = next(r for r in caplog.records if r.getMessage().startswith("Sync source "))
+    assert rec.exc_info and rec.exc_info[0] is KeyError
+
+
+def test_one_failing_stage_does_not_stop_later_stages_or_the_summary(tmp_db, monkeypatch, caplog):
+    """Before 2026-10-22 an exception in rescore/delete_*/retire/auto-ignore
+    propagated: every later stage and the summary write were skipped and the
+    whole sync looked like it never happened."""
+    _stub_sync_pipeline(monkeypatch)
+
     def boom(conn):
         raise RuntimeError("rescore blew up")
 
+    calls = []
     monkeypatch.setattr(web_app.scoring, "rescore_all", boom)
-    with pytest.raises(RuntimeError):
-        web_app.trigger_sync()
-    monkeypatch.setattr(web_app.scoring, "rescore_all", lambda conn: 0)
-    assert web_app.trigger_sync()["scored"] == 0
+    monkeypatch.setattr(web_app.db, "retire_stale_digest_rows", lambda conn: calls.append("retire") or 4)
+    with caplog.at_level("ERROR", logger="web.app"):
+        summary = web_app.trigger_sync()
+
+    assert summary["stage_errors"] == [{"stage": "rescore", "error": "RuntimeError: rescore blew up"}]
+    assert summary["scored"] == {}
+    assert calls == ["retire"] and summary["retired_digest"] == 4
+    stored = json.loads(db.get_state(tmp_db, web_app.SYNC_STATE_KEY))
+    assert stored["stage_errors"] == summary["stage_errors"]
+    assert any(r.exc_info for r in caplog.records)
+
+
+def test_failing_summary_write_still_returns_the_summary(tmp_db, monkeypatch):
+    _stub_sync_pipeline(monkeypatch)
+    real = web_app.db.set_state
+
+    def flaky(conn, key, value):
+        if key == web_app.SYNC_STATE_KEY:
+            raise RuntimeError("disk full")
+        return real(conn, key, value)
+
+    monkeypatch.setattr(web_app.db, "set_state", flaky)
+    summary = web_app.trigger_sync()
+    assert summary["stage_errors"] == [{"stage": "summary_write", "error": "RuntimeError: disk full"}]
 
 
 def test_sync_form_js_checks_response_ok():
