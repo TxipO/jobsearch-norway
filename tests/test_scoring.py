@@ -941,3 +941,37 @@ def test_score_both_profiles_equals_two_score_vacancy_calls():
                 want = score_vacancy(title, desc, mun, county, lang, cats, profile, extent, eng)
                 assert got == want
                 assert json.dumps(got[1]) == json.dumps(want[1])
+
+
+def test_teknisk_support_jobbnorge_boilerplate_is_not_an_it_keyword():
+    """2026-10-22 live measurement: 57 of the 77 active rows containing "teknisk
+    support" had ONLY Jobbnorge's application-form sentence ("kontakt med teknisk
+    support hos Grade Jobbnorge"), each getting +8 IT."""
+    boiler = ("<p>Om du får problemer når du fyller ut søknaden, anbefaler vi at du tar kontakt med "
+              "teknisk support hos Grade Jobbnorge.</p>")
+    nynorsk = "<p>Får du problem, tilrår vi at du tek kontakt med teknisk support hos Grade Jobbnorge.</p>"
+    form = "<p>Trenger du teknisk support i forbindelse med utfylling av søknaden, ta kontakt.</p>"
+    for body in (boiler, nynorsk, form):
+        _, bd = _score("Rådgiver", body, profile="it")
+        assert bd["track_it_support"]["matched"] == []
+    # The boilerplate must not mask a real keyword elsewhere in the same ad.
+    _, bd = _score("Rådgiver", boiler + "<p>Du gir brukerstøtte.</p>", profile="it")
+    assert bd["track_it_support"]["matched"] == ["brukerstøtte"]
+
+
+def test_teknisk_support_needs_a_non_weak_partner():
+    """2026-10-22: alone or paired only with feilsøking it is field service /
+    sales ("Hos oss kan du jobbe med teknologi…" scored IT 36 on exactly
+    "feilsøking" + "teknisk support"). Real support partners and a title that
+    names it keep counting."""
+    body = "<p>Du gjør idriftsettelse, feilsøking, service og teknisk support hos kunder.</p>"
+    _, bd = _score("Hos oss kan du jobbe med teknologi", body, profile="it")
+    assert bd["track_it_support"]["points"] == 0
+    _, bd = _score("Servicetekniker", "<p>Teknisk support til kunder.</p>", profile="it")
+    assert bd["track_it_support"]["points"] == 0
+    _, bd = _score("Servicetekniker", "<p>Teknisk support og brukerstøtte.</p>", profile="it")
+    assert bd["track_it_support"]["points"] == 16
+    # Real IT-support titles keep their (double) title hit, even with no body.
+    _, bd = _score("Teknisk support medarbeider", "<p>Vi søker deg.</p>", profile="it")
+    assert bd["track_it_support"]["matched"] == ["teknisk support"]
+    assert bd["track_it_support"]["points"] == 16

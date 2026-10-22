@@ -35,6 +35,11 @@ EXPECTED_DROPS: dict[str, str] = {
     # produksjon" tag on an engineering title; these live in the IT profile.
     "graduate 2025 - solution engineer": "engineering title, tag-only warehouse signal",
     "testingeniør/ testtekniker": "engineering title, tag-only warehouse signal",
+    # 2026-10-22 "teknisk support" needs a non-weak partner: both rows' ONLY IT
+    # keywords were that phrase (+ "feilsøking"), i.e. field-service / sales work
+    # (an engraving-machine service engineer; a rejected customer-support ad).
+    "reisende servicetekniker med ansvar": "IT signal was only feilsøking + teknisk support (field service)",
+    "customer support representative": "IT signal was only 'teknisk support' in the body (user rejected it)",
 }
 
 

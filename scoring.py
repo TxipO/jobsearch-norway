@@ -51,6 +51,21 @@ LINE_LEVEL_KEYWORDS = {
     "3. linje", "3.linje", "tredjelinje",
 }
 IT_WEAK_CONTEXT_KEYWORDS = {"windows", "microsoft 365", "office 365", "feilsøking", "troubleshooting"}
+# Words that never open IT relevance on their own or in pairs with each other
+# (2026-10-22): "teknisk support" is mostly NOT a support role. Of the 77 active
+# rows containing it, 57 (74%) carry only Jobbnorge's boilerplate (below) and of
+# the other 20 most are field-service / sales / reception ads ("Vil du være med å
+# utvikle teknologi…" 29 -> field service, "Elkjøp … Service Advisor", "Kristiania
+# søker eksamensvakter"); paired with "feilsøking" it still reached the relevance
+# bar. It counts again with any other IT keyword, or when the TITLE names it.
+IT_ALONE_ZERO_KEYWORDS = {"feilsøking", "troubleshooting", "teknisk support"}
+# Jobbnorge's application-form boilerplate ("anbefaler vi at du tar kontakt med
+# teknisk support hos Grade Jobbnorge", and the "i forbindelse med utfylling av
+# søknaden" variant): the technical support of the portal, not of the job.
+# Matched on all 58 live rows carrying it, 0 stragglers (measured 2026-10-22).
+_JOBBNORGE_BOILERPLATE_RE = re.compile(
+    r"teknisk support\s+(?:hos\s+grade\s+jobbnorge|i\s+forbindelse\s+med\s+utfylling\w*)"
+)
 
 # The user's target role family (2026-10-18: hybrid support + drift in a small
 # organisation), TITLE-ONLY. Measured on the live corpus: LinkedIn rows have no
@@ -765,7 +780,7 @@ def _score_profiles(
 
     language_score = 10 if language == "en" else 0
 
-    it_hits, it_kw = _count_keyword_hits(text, IT_SUPPORT_KEYWORDS)
+    it_hits, it_kw = _count_keyword_hits(_JOBBNORGE_BOILERPLATE_RE.sub(" ", text), IT_SUPPORT_KEYWORDS)
     # "feilsøking" (troubleshooting) alone is too generic a word to mean
     # IT-support — measured live 2026-08-29: 139 active ads matched it as
     # the ONLY IT-support keyword present, almost all mechanical/industrial
@@ -798,7 +813,12 @@ def _score_profiles(
     ):
         it_kw = [kw for kw in it_kw if kw not in LINE_LEVEL_KEYWORDS]
         it_hits = len(it_kw)
-    if not target_title and it_kw in (["feilsøking"], ["troubleshooting"], ["feilsøking", "troubleshooting"]):
+    if (
+        not target_title
+        and it_kw
+        and all(kw in IT_ALONE_ZERO_KEYWORDS for kw in it_kw)
+        and "teknisk support" not in title_l  # a title naming it is a real support role
+    ):
         it_hits, it_kw = 0, []
     # 2026-10-10: the IT-support and dev tracks are zeroed in the "warehouse"
     # profile (matched keywords stay in the breakdown), mirroring how the
