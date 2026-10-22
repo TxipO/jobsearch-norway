@@ -40,6 +40,8 @@ EXPECTED_DROPS: dict[str, str] = {
     # (an engraving-machine service engineer; a rejected customer-support ad).
     "reisende servicetekniker med ansvar": "IT signal was only feilsøking + teknisk support (field service)",
     "customer support representative": "IT signal was only 'teknisk support' in the body (user rejected it)",
+    # 2026-10-22 title retail/hospitality penalty (no NAV category on finn/FB rows):
+    "ekstrahjelper (bar, resepsjon": "bar/reception ad the user rejected; -15 title penalty is the 2026-08-18 retail/hospitality decision",
 }
 
 

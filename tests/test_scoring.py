@@ -975,3 +975,48 @@ def test_teknisk_support_needs_a_non_weak_partner():
     _, bd = _score("Teknisk support medarbeider", "<p>Vi søker deg.</p>", profile="it")
     assert bd["track_it_support"]["matched"] == ["teknisk support"]
     assert bd["track_it_support"]["points"] == 16
+
+
+def test_kundeservice_title_does_not_open_warehouse_relevance_or_count_double():
+    """2026-10-22: 42 visible titles hold kundeservice/customer service; they
+    scored 22-44 in the warehouse profile (title hit counted double and opened
+    relevance - "Hyre ... kundeservicemedarbeider" 38). A BODY hit still counts
+    once; a real warehouse title keyword still counts double."""
+    _, bd = _score("Kundeservicemedarbeider", "<p>Vi søker deg.</p>")
+    assert bd["track_general_entry_level"]["points"] == 6
+    assert bd["context_gate"]["matched"] is True
+    _, bd = _score("Customer Service Coordinator", "<p>Vi søker deg.</p>")
+    assert bd["track_general_entry_level"]["points"] == 6
+    assert bd["context_gate"]["matched"] is True
+    _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>")
+    assert bd["track_general_entry_level"]["points"] == 12
+    assert bd["context_gate"]["matched"] is False
+
+
+def test_retail_title_penalty_when_no_nav_category():
+    """2026-10-22: finn/LinkedIn rows never carry NAV's "Salg og service"/
+    "Reiseliv og mat" category, so the -15 never fired on them (warehouse top 100
+    held 9 sales/customer-service ads)."""
+    for title, word in [
+        ("Butikkmedarbeider deltid", "butikk"), ("Salgskonsulent", "salg"),
+        ("Selger – Elkjøp", "selger"), ("Servitører søkes til voksende restaurant", "servitør"),
+        ("Resepsjonist/hotellvert", "resepsjon"), ("Barista til Starbucks", "barista"),
+        ("Kafémedarbeider", "kafé"),
+    ]:
+        for profile in ("warehouse", "it"):
+            _, bd = _score(title, "<p>Vi søker deg.</p>", profile=profile)
+            assert bd["occupation_category_bonus"]["points"] == -15, title
+            assert f"tittel: {word}" in bd["occupation_category_bonus"]["matched"], title
+
+
+def test_retail_title_penalty_not_double_counted_and_no_lookalikes():
+    nav = '[{"level1": "Salg og service", "level2": "Salg, butikk- og kundeservice"}]'
+    _, bd = _score("Butikkmedarbeider", "<p>Vi søker deg.</p>", occupation_categories=nav)
+    assert bd["occupation_category_bonus"]["points"] == -15  # NAV's own, not -30
+    assert bd["occupation_category_bonus"]["matched"] == ["Salg og service"]
+    # Mirror: \b-anchored, so a warehouse for an online shop is NOT retail; nor are
+    # non-sales words that merely contain the letters.
+    for title in ("Julehjelp – Pakking av ordre for nettbutikker", "Lagermedarbeider", "Kjøkkenmontør",
+                  "Vi søker en lagersjef", "IT-konsulent"):
+        _, bd = _score(title, "<p>Vi søker deg.</p>")
+        assert bd["occupation_category_bonus"]["points"] == 0, title

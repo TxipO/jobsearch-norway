@@ -134,6 +134,16 @@ GENERAL_ENTRY_KEYWORDS = [
 # (Overingeniør, 3-year project post) picking up +12 from exactly this
 # boilerplate.
 GENERAL_ENTRY_TITLE_KEYWORDS = ["vikar", "deltid"]
+# Customer-service words describe an office/call-centre/shop job, not
+# warehouse or production work, so a TITLE hit no longer counts double or opens
+# warehouse relevance (2026-10-22). Measured on the 42 visible titles holding
+# one: 3 are warehouse-adjacent ("Lager og kundeservice medarbeider" - still
+# matched by lagermedarbeider in the body, DSV Road administration, a car-dealer
+# ad), the rest customer-service/sales desks that scored 22-44 in the warehouse
+# profile ("Hyre ... kundeservicemedarbeider på deltid" 38, 25 of the 42 have no
+# NAV category so the NAV retail penalty never reached them). As BODY keywords
+# they still count once, as before.
+ENTRY_TITLE_EXEMPT_KEYWORDS = {"kundeservice", "kundebehandling", "customer service"}
 # NOTE: bare "lager" (meant as "warehouse") deliberately excluded — live
 # false-positive audit 2026-07-18 found it matching the Norwegian verb
 # "å lage" ("to make"), conjugated "lager" ("makes"), in ordinary business
@@ -474,6 +484,23 @@ OCCUPATION_CATEGORY_PENALTY = {
     "Salg og service": -15,
     "Reiseliv og mat": -15,
 }
+# The same rejection (2026-08-18) read from the TITLE, for rows with no NAV
+# category (finn/LinkedIn/manual never have one; the penalty above can only
+# fire on NAV rows). Measured 2026-10-22: of the warehouse top 100, 9 were
+# customer-service/sales ads - "Nyutdannet … salg og kundeservice" 44, "Thon …
+# Hentepunkt/Kundeservice" 44, "Hyre … kundeservicemedarbeider" 38, a Telia sales
+# team ad. Title-only, each word read on the live corpus (not-already-penalised
+# titles): salg* 58, selger* 22, butikk* 57 ("nettbutikker" is NOT a hit: \b), kasse 2,
+# kafé 3, restaurant 3, servitør 4, resepsjon 12, hotell 9, barista/bartender 6,
+# retail/sales 15 - all sales/retail/hospitality work; one wrong hit seen
+# ("…modellene du har utviklet, faktisk øker både salg og bunnlinje", a data role
+# already at 12). Not applied on top of NAV's own penalty (no double count).
+RETAIL_TITLE_PENALTY = -15
+RETAIL_TITLE_RE = re.compile(
+    r"\bsalg|\bselger|\bbutikk|\bkasse(?:medarbeider)?\b|\bkassa\b|\bcaf[eé]|\bkafé|\brestaurant|"
+    r"\bservitør|\bservitrise|\bresepsjon|\breceptionist|\bhotell|\bhotel\b|\bbarista|\bbartender|"
+    r"\bretail|\bsales\b"
+)
 
 # Explicit phone-channel markers — added 2026-08-18, user wants chat/
 # written support, not phone-based ("звичайну підтримку по чатам... без
@@ -862,7 +889,9 @@ def _score_profiles(
     # of which profile is active.
     entry_hits, entry_kw = _count_keyword_hits(text, GENERAL_ENTRY_KEYWORDS)
     entry_title_hits = [kw for kw in GENERAL_ENTRY_TITLE_KEYWORDS if kw in title_l]
-    entry_kw_in_title = sum(1 for kw in entry_kw if kw in title_l)  # title match counts double
+    # Title match counts double and opens relevance - except the customer-service
+    # words (ENTRY_TITLE_EXEMPT_KEYWORDS).
+    entry_kw_in_title = sum(1 for kw in entry_kw if kw in title_l and kw not in ENTRY_TITLE_EXEMPT_KEYWORDS)
     entry_track_score_if_wh = min((entry_hits + len(entry_title_hits) + entry_kw_in_title) * 6, 30)
 
     dev_hits, dev_kw = _count_keyword_hits(text, DEV_SECURITY_KEYWORDS)
@@ -952,6 +981,10 @@ def _score_profiles(
     # "utvikler"/"programmer" are common verbs, it added only 3 more ads.
     category_bonus_if_wh = min(category_bonus_raw, 15) if "IT" not in category_l1 else 0
     category_penalty = sum(OCCUPATION_CATEGORY_PENALTY.get(c, 0) for c in category_l1)
+    category_matched = sorted(category_l1)
+    if not category_penalty and (retail_m := RETAIL_TITLE_RE.search(title_l)):
+        category_penalty = RETAIL_TITLE_PENALTY
+        category_matched.append(f"tittel: {retail_m.group(0)}")
 
     is_phone_support = any(kw in text for kw in PHONE_SUPPORT_KEYWORDS)
     phone_penalty = -10 if is_phone_support else 0
@@ -1031,7 +1064,7 @@ def _score_profiles(
             "degree_penalty": {"points": degree_penalty, "matched": requires_degree},
             "norwegian_fluency_penalty": {"points": language_penalty, "matched": requires_norwegian_fluency},
             "occupation_category_bonus": {
-                "points": category_bonus + category_penalty, "matched": sorted(category_l1),
+                "points": category_bonus + category_penalty, "matched": list(category_matched),
             },
             "phone_support_penalty": {"points": phone_penalty, "matched": is_phone_support},
             "relocation_worthiness_penalty": {
