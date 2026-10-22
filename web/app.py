@@ -2,6 +2,7 @@ import html
 import json
 import logging
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -594,8 +595,9 @@ def _run_sync() -> dict:
     backup_failed = None
     try:
         db.backup_db()
-    except OSError as e:
-        backup_failed = str(e)
+    except (OSError, sqlite3.Error) as e:
+        logger.exception("DB backup failed")
+        backup_failed = f"{type(e).__name__}: {e}"
 
     conn = get_conn()
     # Read before overwriting: this becomes the "new since" watermark for the

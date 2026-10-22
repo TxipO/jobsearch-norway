@@ -3,6 +3,9 @@ never drift since they share _vacancy_filters), migrations being safely
 re-runnable, and the source-agnostic upsert path Jobbnorge/finn.no use."""
 
 import json
+import sqlite3
+
+import pytest
 
 import db
 
@@ -47,7 +50,54 @@ def test_backup_db_creates_timestamped_copy(tmp_path):
     assert dest is not None
     assert dest.exists()
     assert dest.parent == backup_dir
-    assert dest.read_bytes() == db_path.read_bytes()
+    # Not byte-identical any more (online backup API), but a valid, equal DB.
+    assert _count_rows(dest) == _count_rows(db_path)
+
+
+def _count_rows(path):
+    c = sqlite3.connect(path)
+    try:
+        assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        return c.execute("SELECT COUNT(*) FROM vacancies").fetchone()[0]
+    finally:
+        c.close()
+
+
+def test_backup_db_of_a_db_with_rows_is_a_valid_equal_db_even_with_an_open_writer(tmp_path):
+    """Review 2026-10-22: backup_db copied the live file with copyfile although the
+    web routes / CLI hold connections. The snapshot must open and hold exactly
+    the committed rows even while another connection has an uncommitted write."""
+    db_path = tmp_path / "test.db"
+    conn = db.connect(db_path)
+    for i in range(20):
+        db.upsert_vacancy_row(conn, {"uuid": f"u{i}", "title": "T"}, source="finn")
+    conn.execute("UPDATE vacancies SET title = 'pending' WHERE uuid = 'u0'")  # open transaction, not committed
+
+    dest = db.backup_db(db_path=db_path, backup_dir=tmp_path / "backups")
+
+    assert _count_rows(dest) == 20
+    b = sqlite3.connect(dest)
+    assert b.execute("SELECT title FROM vacancies WHERE uuid = 'u0'").fetchone()[0] == "T"
+    b.close()
+    assert not list((tmp_path / "backups").glob("*.partial"))
+    conn.close()
+
+
+def test_failed_backup_leaves_no_partial_file_and_does_not_prune(tmp_path):
+    """A source that is not a database used to be copied verbatim and 'succeed'
+    (and the junk copy counted toward retention). Now it raises and leaves
+    nothing behind, existing backups untouched."""
+    db_path = tmp_path / "test.db"
+    db_path.write_bytes(b"this is not a sqlite database" * 100)
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    for i in range(3):
+        (backup_dir / f"jobsearch_2026010{i}_000000.db").write_bytes(b"x")
+
+    with pytest.raises(sqlite3.DatabaseError):
+        db.backup_db(db_path=db_path, backup_dir=backup_dir, keep=3)
+
+    assert sorted(p.name for p in backup_dir.iterdir()) == [f"jobsearch_2026010{i}_000000.db" for i in range(3)]
 
 
 def test_backup_db_returns_none_for_missing_source(tmp_path):

@@ -1,7 +1,7 @@
 import html as html_module
 import json
 import re
-import shutil
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -221,18 +221,37 @@ def backup_db(db_path: Path = DB_PATH, backup_dir: Path = BACKUP_DIR, keep: int 
     vacancies with no way to recover the prior values. There was no backup
     to restore from. Called at the start of trigger_sync() (web/app.py) —
     every "Sync now" click snapshots first, so a future mistake has
-    something to roll back to. Copies the raw file rather than an
-    sqlite backup API call: simplest thing that actually works for a local
-    single-writer file, and the DB is never open with pending
-    transactions at the point this runs (called before any connection is
-    opened for the sync itself).
+    something to roll back to.
+
+    Uses sqlite3's online backup API, not a file copy (2026-10-22 review): the
+    old copyfile docstring claimed the DB is never open with pending
+    transactions here, but the web routes, the CLI sync and the /sync-status
+    poll all hold connections, so a plain copy could capture a half-written
+    file that only fails when someone finally restores it. The snapshot is
+    written under a temporary name and renamed on success; a failed backup
+    leaves no partial file behind (it would otherwise count toward `keep`
+    and push out a good one) and raises sqlite3.Error / OSError.
     """
     if not db_path.exists():
         return None
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = backup_dir / f"jobsearch_{stamp}.db"
-    shutil.copyfile(db_path, dest)
+    tmp = backup_dir / f"jobsearch_{stamp}.db.partial"  # not matched by the jobsearch_*.db retention glob
+    try:
+        src = sqlite3.connect(db_path, timeout=30)
+        try:
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
     backups = sorted(backup_dir.glob("jobsearch_*.db"))
     for old in backups[:-keep]:

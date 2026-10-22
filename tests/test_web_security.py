@@ -372,3 +372,16 @@ def test_index_warns_when_the_server_runs_older_code_than_the_files_on_disk(tmp_
     assert "Сервер працює зі старою версією коду" in web_app.index(request, user_status=[]).body.decode()
     monkeypatch.setattr(web_app, "SERVER_STARTED_AT", 4_000_000_000.0)  # started after every edit
     assert "Сервер працює зі старою версією коду" not in web_app.index(request, user_status=[]).body.decode()
+
+
+def test_backup_sqlite_error_does_not_block_the_sync(tmp_db, monkeypatch):
+    import sqlite3 as _sqlite3
+    _stub_sync_pipeline(monkeypatch)
+
+    def bad_backup():
+        raise _sqlite3.DatabaseError("file is not a database")
+
+    monkeypatch.setattr(web_app.db, "backup_db", bad_backup)
+    summary = web_app.trigger_sync()
+    assert summary["backup_failed"] == "DatabaseError: file is not a database"
+    assert summary["stage_errors"] == []
