@@ -1077,8 +1077,16 @@ def delete_inactive(conn: sqlite3.Connection) -> int:
     user's own tracking of jobs they applied to. ("archived" rows are
     "kept" by this function specifically, but get removed by the separate
     delete_archived() call in the same sync — that status means the user
-    wants the row gone regardless of source state.)"""
-    cur = conn.execute("DELETE FROM vacancies WHERE status = 'INACTIVE' AND user_status = 'new'")
+    wants the row gone regardless of source state.)
+
+    A flagged (🚩) or annotated row is the user's own record too and is kept,
+    exactly as retire_stale_digest_rows keeps it (2026-10-22: this and
+    delete_expired_unreacted lacked the guard, so a 'new' row with a flag or a
+    note was deleted the moment its listing closed or its deadline passed)."""
+    cur = conn.execute(
+        "DELETE FROM vacancies WHERE status = 'INACTIVE' AND user_status = 'new' "
+        "AND flagged_at IS NULL AND COALESCE(notes, '') = ''"
+    )
     conn.commit()
     return cur.rowcount
 
@@ -1160,11 +1168,15 @@ def delete_expired_unreacted(conn: sqlite3.Connection) -> int:
     "we evaluate continuously", or genuinely unparseable) is left alone
     since we can't tell if it's actually expired. Before 2026-08-27 this
     GLOB-checked the raw application_due column directly, which silently
-    never expired any row whose raw due date wasn't already ISO-shaped."""
+    never expired any row whose raw due date wasn't already ISO-shaped.
+
+    Flagged (🚩) and annotated rows are kept like any other user history (see
+    delete_inactive)."""
     cur = conn.execute(
         """
         DELETE FROM vacancies
         WHERE user_status = 'new'
+          AND flagged_at IS NULL AND COALESCE(notes, '') = ''
           AND application_due_sort IS NOT NULL
           AND date(application_due_sort) < date('now')
         """

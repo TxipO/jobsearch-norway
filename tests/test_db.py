@@ -1032,3 +1032,35 @@ def test_count_new_high_score_ignores_flagged_rows(tmp_path):
     db.set_flagged(conn, "b", True)
     assert db.count_new_high_score(conn, "2000-01-01 00:00:00", 70) == 1
     assert db.count_new_high_score(conn, "2000-01-01 00:00:00", 70) == db.count_vacancies(conn, min_score=70)
+
+
+def test_delete_paths_keep_flagged_and_noted_rows(tmp_path):
+    """Review 2026-10-22: retire_stale_digest_rows protected a 🚩 or noted 'new' row,
+    but delete_inactive and delete_expired_unreacted did not - such a row was
+    deleted the moment its listing closed or its deadline passed."""
+    conn = _make_conn(tmp_path)
+    for uuid, kwargs in (
+        ("inactive-flagged", {"status": "INACTIVE"}),
+        ("inactive-noted", {"status": "INACTIVE"}),
+        ("inactive-plain", {"status": "INACTIVE"}),
+        ("expired-flagged", {"application_due": "2020-01-01"}),
+        ("expired-noted", {"application_due": "2020-01-01"}),
+        ("expired-plain", {"application_due": "2020-01-01"}),
+    ):
+        _insert_vacancy(conn, uuid, **kwargs)
+    for uuid in ("inactive-flagged", "expired-flagged"):
+        db.set_flagged(conn, uuid, True)
+    for uuid in ("inactive-noted", "expired-noted"):
+        db.set_notes(conn, uuid, "ring dem på mandag")
+
+    assert db.delete_inactive(conn) == 1
+    assert db.delete_expired_unreacted(conn) == 1
+
+    remaining = {r[0] for r in conn.execute("SELECT uuid FROM vacancies")}
+    assert remaining == {"inactive-flagged", "inactive-noted", "expired-flagged", "expired-noted"}
+
+    # Once the flag/note is gone the normal rules apply again.
+    db.set_flagged(conn, "inactive-flagged", False)
+    db.set_notes(conn, "expired-noted", "")
+    assert db.delete_inactive(conn) == 1
+    assert db.delete_expired_unreacted(conn) == 1
