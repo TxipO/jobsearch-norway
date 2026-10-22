@@ -21,6 +21,9 @@ days of daily use.
 
 import json
 import time
+
+import pytest
+
 import db
 import nav_client
 
@@ -671,3 +674,70 @@ def test_detail_401_with_a_stale_token_refreshes_once_and_retries(tmp_path, monk
     assert stats["new"] == 12 and stats["detail_errors"] == 0
     assert len(token_calls) == 1, "all threads share one token refresh"
     assert db.get_state(conn, nav_client.TOKEN_KEY) == "fresh-token"
+
+
+def _breaker_page_feed(monkeypatch, bad, good, workers):
+    """p1 = `bad` (always fail fast) followed by `good`; a seeded NAV row lets
+    the health probe answer, so the failures are charged to the ads."""
+    pages = {"p0": {"items": [_entry("seed")], "next_id": "p1"},
+             "p1": {"items": [_entry(u) for u in bad + good], "next_id": "p2"},
+             "p2": {"items": [], "etag": "tip"}}
+    _install_flaky_feed(monkeypatch, pages, set(bad), lambda: nav_client.requests.ConnectionError("boom"))
+    monkeypatch.setattr(nav_client, "DETAIL_FETCH_WORKERS", workers)
+
+
+@pytest.mark.parametrize("workers", [1, 8])
+def test_breaker_trip_then_give_up_does_not_drop_the_unfetched_rest_of_the_page(tmp_path, monkeypatch, workers):
+    """Reviewed 2026-10-22: >= BREAKER_FAILURES failing ads at the head of a long
+    sealed page tripped the breaker, which cancelled the rest of the pool; after
+    MAX_DETAIL_HOLDS syncs the failing ads were given up (not recorded as done),
+    page_detail_errors hit 0 and the cursor advanced past the page - every ad
+    that was never attempted (300 in the repro) was lost."""
+    bad = [f"b{i}" for i in range(5)]
+    good = [f"g{i}" for i in range(300)]
+    _breaker_page_feed(monkeypatch, bad, good, workers)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p0")
+
+    for _ in range(nav_client.MAX_DETAIL_HOLDS + 4):
+        nav_client.sync(conn)
+        if db.get_state(conn, nav_client.CURSOR_KEY) == "p2":
+            break
+
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2", "the page must eventually be passed"
+    have = {r[0] for r in conn.execute("SELECT uuid FROM vacancies")}
+    assert set(good) <= have, f"{len(set(good) - have)} good ads lost"
+    assert not set(bad) & have
+
+
+def test_cursor_is_held_while_part_of_the_page_was_never_attempted(tmp_path, monkeypatch):
+    bad = [f"b{i}" for i in range(5)]
+    good = [f"g{i}" for i in range(30)]
+    _breaker_page_feed(monkeypatch, bad, good, 1)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p0")
+
+    for _ in range(nav_client.MAX_DETAIL_HOLDS):
+        stats = nav_client.sync(conn)
+        assert db.get_state(conn, nav_client.CURSOR_KEY) == "p1"
+        assert stats["detail_errors"] >= len(bad)
+    # the give-up sync: bad ads are written off, the rest is attempted, page passed
+    stats = nav_client.sync(conn)
+    assert stats["detail_missing"] == len(bad)
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"
+
+
+def test_malformed_feed_entries_are_skipped_not_fatal(tmp_path, monkeypatch):
+    pages = {"p1": {"items": [_entry("a"), "junk", None, {"no_entry": 1}, {"_feed_entry": {"status": "ACTIVE"}},
+                              {"_feed_entry": {"uuid": "x"}}, {"_feed_entry": "str"}, _entry("b")],
+                     "next_id": "p2"},
+             "p2": {"items": [], "etag": "tip"}}
+    _install_flaky_feed(monkeypatch, pages, set(), lambda: None)
+    conn = db.connect(tmp_path / "t.db")
+    db.set_state(conn, nav_client.CURSOR_KEY, "p1")
+
+    stats = nav_client.sync(conn)
+
+    assert stats["malformed"] == 6
+    assert {r[0] for r in conn.execute("SELECT uuid FROM vacancies")} == {"a", "b"}
+    assert db.get_state(conn, nav_client.CURSOR_KEY) == "p2"

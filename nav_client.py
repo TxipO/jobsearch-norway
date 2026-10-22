@@ -257,7 +257,14 @@ def sync(conn: sqlite3.Connection) -> dict:
         # opposite of what the feed said.
         latest = {}
         for item in page["items"]:
-            entry = item["_feed_entry"]
+            entry = item.get("_feed_entry") if isinstance(item, dict) else None
+            if not isinstance(entry, dict) or not isinstance(entry.get("uuid"), str)                     or not isinstance(entry.get("status"), str):
+                # A malformed entry must not raise before the cursor advances -
+                # that wedges the cursor on this page forever (same shape as
+                # the INACTIVE .get() case below). Skipped, visible in stats.
+                stats["malformed"] = stats.get("malformed", 0) + 1
+                logger.warning(f"Skipping malformed feed entry on page {page.get('id')}: {str(item)[:200]}")
+                continue
             latest[entry["uuid"]] = entry
 
         active_uuids = []
@@ -278,13 +285,29 @@ def sync(conn: sqlite3.Connection) -> dict:
         # thread; worker threads only ever touch the network, never `conn`.
         done = _load_progress(conn, page.get("id"))
         done_before = dict(done)
+        # Ads that already failed MAX_DETAIL_HOLDS held syncs are given up on
+        # HERE, before the fetch, and recorded in `done`. Doing it after a
+        # further failed fetch (as before) left them out of `done`, so an ad
+        # whose feed entry has no sistEndret was fetched, failed and tripped
+        # the breaker again on every sync - and the cursor logic below now
+        # holds a page whose ads were not all attempted.
+        for u in active_uuids:
+            if failures.get(u, 0) >= MAX_DETAIL_HOLDS:
+                logger.warning(
+                    f"Giving up on {u}: detail failed on {MAX_DETAIL_HOLDS} "
+                    f"consecutive held syncs; counting it as missing so the cursor can advance."
+                )
+                stats["detail_missing"] += 1
+                done[u] = latest[u].get("sistEndret") or ""
         todo = [u for u in active_uuids
-                if not (latest[u].get("sistEndret") and done.get(u) == latest[u]["sistEndret"])]
+                if not (latest[u].get("sistEndret") and done.get(u) == latest[u]["sistEndret"])
+                and failures.get(u, 0) < MAX_DETAIL_HOLDS]
         if len(todo) != len(active_uuids):
             stats["skipped"] = stats.get("skipped", 0) + len(active_uuids) - len(todo)
         page_detail_errors = 0
         failures_before = dict(failures)
         transient: list[str] = []  # uuids whose detail failed transiently on this page
+        settled: set[str] = set()  # todo uuids with a final answer this sync (imported/skipped/withdrawn)
         successes = 0
         in_a_row = 0
         tripped = False
@@ -302,6 +325,7 @@ def sync(conn: sqlite3.Connection) -> dict:
                         if _is_permanent_detail_error(e):
                             stats["detail_missing"] += 1
                             done[uuid] = latest[uuid].get("sistEndret") or ""
+                            settled.add(uuid)
                             continue
                         transient.append(uuid)
                         in_a_row += 1
@@ -314,6 +338,7 @@ def sync(conn: sqlite3.Connection) -> dict:
                     successes += 1
                     failures.pop(uuid, None)
                     done[uuid] = latest[uuid].get("sistEndret") or ""
+                    settled.add(uuid)
                     if ad is None:
                         # No content is a stable answer, not a transient
                         # failure: skip it, retrying would never change it.
@@ -347,15 +372,19 @@ def sync(conn: sqlite3.Connection) -> dict:
                 page_detail_errors = len(transient)
             else:
                 for uuid in transient:
-                    if failures.get(uuid, 0) >= MAX_DETAIL_HOLDS:
-                        logger.warning(
-                            f"Giving up on {uuid}: detail failed on {MAX_DETAIL_HOLDS} "
-                            f"consecutive held syncs; counting it as missing so the cursor can advance."
-                        )
-                        stats["detail_missing"] += 1
-                    else:
-                        failures[uuid] = failures.get(uuid, 0) + 1
-                        page_detail_errors += 1
+                    failures[uuid] = failures.get(uuid, 0) + 1
+                    page_detail_errors += 1
+
+        # Ads never attempted: a breaker trip cancels the rest of the pool. The
+        # cursor used to advance past them as soon as the failing ads were
+        # given up (page_detail_errors == 0) - up to a whole sealed page lost
+        # (reproduced: 5 failing + 300 good ads, all 300 dropped). Hold the
+        # page; the next sync skips what is in `done` and continues, and the
+        # failing ads keep being charged until they are given up, so each
+        # sync makes progress and the hold cannot last forever.
+        transient_set = set(transient)
+        unattempted = [u for u in todo if u not in settled and u not in transient_set]
+        page_detail_errors += len(unattempted)
 
         if failures != failures_before:
             _save_failures(conn, failures)
