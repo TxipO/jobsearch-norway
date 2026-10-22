@@ -251,11 +251,14 @@ def test_sync_lock_released_when_sync_raises(tmp_db, monkeypatch):
     def boom():
         raise RuntimeError("no connection")
 
-    monkeypatch.setattr(web_app, "get_conn", boom)
-    with pytest.raises(RuntimeError):
-        web_app.trigger_sync()
-    monkeypatch.undo()
-    _stub_sync_pipeline(monkeypatch)
+    # A nested context, NOT monkeypatch.undo(): undo() also reverted tmp_db's
+    # db.connect patch, so the second sync below ran its delete/retire stages
+    # and wrote its summary into the real data/jobsearch.db on every test run
+    # (found 2026-10-22).
+    with monkeypatch.context() as m:
+        m.setattr(web_app, "get_conn", boom)
+        with pytest.raises(RuntimeError):
+            web_app.trigger_sync()
     assert web_app.trigger_sync()["scored"] == 0
 
 
