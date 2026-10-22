@@ -1,6 +1,19 @@
 data/
 credentials/
-.env
+# Wildcards, not bare names: a .bak/.old/~/.local copy next to the real file
+# must not slip past an exact-name rule (the profile/photo.jpg.bak incident).
+.env*
+!.env.example
+# Stray copies of secrets/DB/tokens outside the ignored dirs above.
+client_secret*.json
+gmail_token*
+token.json*
+*.db
+*.db-*
+*.sqlite*
+*.bak
+*.orig
+*~
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -10,11 +23,12 @@ _check/
 # Impeccable design-tool working state/cache, not a deliverable.
 .impeccable/
 # Real personal contact data (name/phone/email/address) — never in git.
-profile/personal.json
+profile/personal.json*
+!profile/personal.json.example
 # Headshot photo used in the CV header — personal image, never in git.
 # Wildcard (not just the bare name) so a stray .bak/copy never slips in
 # either — caught live 2026-08-21: an untracked profile/photo.jpg.bak sat
 # right next to this rule, which only matched the exact filename.
-profile/photo.jpg*
+profile/photo*
 # Generated CV/søknad docx are personal application artifacts, keep local.
 profile/generated/
