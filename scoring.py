@@ -241,6 +241,29 @@ YEARS_EXPERIENCE_PATTERNS = [
     r"flere års erfaring",
 ]
 
+# The IT profile penalises a years requirement only from this many years up
+# (2026-10-22, user: «Звідки взагалі цей штраф у айті? Втф?» - he has ~4.5 years of
+# IT support, so "2 års erfaring" is not a barrier). Lower bound of a range counts
+# ("2-4 års erfaring" = 2); "flere års erfaring" has no number = vague, no penalty.
+# The warehouse profile keeps the any-mention -10.
+IT_MIN_YEARS_PENALISED = 5
+_YEARS_RANGE_BEFORE_RE = re.compile(r"(\d+)\s*(?:-|–|—|til|to)\s*$")
+
+
+def _required_years(found: list) -> int | None:
+    """Largest years requirement among the firm YEARS_EXPERIENCE_PATTERNS
+    matches of `_firm_pattern_matches(found=...)`; None when none carries a number."""
+    best = None
+    for clause, m in found:
+        num = re.search(r"\d+", m.group(0))
+        if not num:
+            continue  # "flere års erfaring"
+        rng = _YEARS_RANGE_BEFORE_RE.search(clause[:m.start()])
+        n = int(rng.group(1)) if rng else int(num.group(0))
+        best = n if best is None else max(best, n)
+    return best
+
+
 # Title-level "this role IS a developer role" markers — user-requested
 # 2026-08-29 ("я не розробник, якщо це основна ціль вакансії — мені це не
 # треба"): a big penalty when the JOB ITSELF is a dev/data-engineering
@@ -408,6 +431,7 @@ _compile = functools.lru_cache(maxsize=None)(re.compile)
 
 def _firm_pattern_matches(
     text: str, patterns: list[str], years_boilerplate: bool = False, clauses: _Clauses | None = None,
+    found: list | None = None,
 ) -> list[str]:
     """Which of `patterns` match as a FIRM statement somewhere in `text`
     (already lowercased, one bullet/paragraph per line — see
@@ -425,7 +449,10 @@ def _firm_pattern_matches(
     every clause (a clause is a substring of the text and none of these
     patterns has an anchor or lookbehind), so only patterns present anywhere
     are tried per clause, and the softener check runs only for a clause where
-    one of them actually matched. `clauses` is the shared pre-split text."""
+    one of them actually matched. `clauses` is the shared pre-split text.
+
+    `found`, when given, additionally receives (clause, match) for EVERY firm
+    match (not only the first per pattern) - the years parser needs the numbers."""
     compiled = [(p, _compile(p)) for p in patterns]
     present = [(p, rx) for p, rx in compiled if rx.search(text)]
     if not present:
@@ -434,7 +461,7 @@ def _firm_pattern_matches(
         clauses = _Clauses(text)
     firm: list[str] = []
     for clause, in_required_section in clauses.get():
-        todo = [(p, rx) for p, rx in present if p not in firm and rx.search(clause)]
+        todo = [(p, rx) for p, rx in present if (found is not None or p not in firm) and rx.search(clause)]
         if not todo:
             continue
         # No equivalence alternatives: "3 års erfaring ... eller tilsvarende"
@@ -442,7 +469,7 @@ def _firm_pattern_matches(
         if has_optional_marker(clause, include_equivalence=False):
             continue
         for p, rx in todo:
-            if p in firm:  # the same pattern string listed twice
+            if found is None and p in firm:  # the same pattern string listed twice
                 continue
             for m in rx.finditer(clause):
                 before = clause[:m.start()]
@@ -454,8 +481,11 @@ def _firm_pattern_matches(
                     and not (REQUIREMENT_VERB_RE.search(clause) or in_required_section)
                 ):
                     continue
-                firm.append(p)
-                break
+                if p not in firm:
+                    firm.append(p)
+                if found is None:
+                    break
+                found.append((clause, m))
     return firm
 
 
@@ -990,10 +1020,18 @@ def _score_profiles(
         or bool(SENIOR_LEAD_RE.search(title_l))
         or bool(MANAGEMENT_TITLE_RE.search(title_l))
     )
+    # Warehouse: any firm years mention. IT: only a requirement of
+    # IT_MIN_YEARS_PENALISED+ years (measured 2026-10-22 on 131 live matches: 55
+    # ask 1-4 years, 51 ask 5+, 25 are the vague "flere års erfaring"); parsed once
+    # here, applied per profile below.
+    years_found: list = []
     requires_years = bool(
-        _firm_pattern_matches(text, YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True, clauses=clauses)
+        _firm_pattern_matches(
+            text, YEARS_EXPERIENCE_PATTERNS, years_boilerplate=True, clauses=clauses, found=years_found,
+        )
     )
-    senior_penalty = (-15 if is_senior_title else 0) + (-10 if requires_years else 0)
+    years_n = _required_years(years_found)
+    requires_years_it = years_n is not None and years_n >= IT_MIN_YEARS_PENALISED
 
     management_matches = _firm_pattern_matches(text, MANAGEMENT_REQUIRED_PATTERNS, clauses=clauses)
     management_penalty = -30 if management_matches else 0
@@ -1095,6 +1133,8 @@ def _score_profiles(
     results: dict[str, tuple[int, dict]] = {}
     for profile in profiles:
         is_it = profile == "it"
+        years_penalised = requires_years_it if is_it else requires_years
+        senior_penalty = (-15 if is_senior_title else 0) + (-10 if years_penalised else 0)
         it_score = it_score_if_it if is_it else 0
         nav_it_ops = nav_it_tag and it_score > 0
         nav_it_ops_points = 8 if nav_it_ops and is_it else 0
@@ -1140,7 +1180,7 @@ def _score_profiles(
             "entry_level_bonus": {"points": entry_level_bonus, "matched": is_entry_level},
             "senior_penalty": {
                 "points": senior_penalty,
-                "matched": {"senior_title": is_senior_title, "years_required": requires_years},
+                "matched": {"senior_title": is_senior_title, "years_required": years_penalised},
             },
             "management_penalty": {"points": management_penalty, "matched": list(management_matches)},
             "remote_bonus": {"points": remote_score, "matched": is_remote},

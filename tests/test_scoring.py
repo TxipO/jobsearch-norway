@@ -1118,3 +1118,31 @@ def test_vikar_and_deltid_title_words_add_no_warehouse_points_or_relevance():
     assert bd["track_general_entry_level"]["points"] == 12  # lagermedarbeider body + title
     assert bd["track_general_entry_level"]["matched"] == ["lagermedarbeider"]
     assert bd["context_gate"]["matched"] is False
+
+
+def test_it_profile_penalises_only_five_plus_years_warehouse_keeps_any_mention():
+    """2026-10-22, user: «Звідки взагалі цей штраф у айті? Втф?» - he has ~4.5 years of
+    IT support, so a 1-4 year requirement must not cost -10 in the IT profile. The
+    warehouse profile keeps the old any-mention penalty."""
+    def years(desc, profile):
+        _, bd = _score("Servicedesk-medarbeider", desc, profile=profile)
+        return bd["senior_penalty"]["points"], bd["senior_penalty"]["matched"]["years_required"]
+
+    for desc in (
+        "Du har minimum 3 års erfaring fra IT-support.",
+        "Vi ønsker 2-4 års erfaring.",            # range: lower bound 2
+        "Du har 3 til 5 år erfaring fra drift.",  # range: lower bound 3
+        "Du har 2–3 års erfaring.",
+        "Du har flere års erfaring fra IT.",      # vague: no number, no IT penalty
+        "Krav: 4+ years of experience.",
+    ):
+        assert years(desc, "it") == (0, False), desc
+        assert years(desc, "warehouse") == (-10, True), desc  # unchanged
+    for desc in (
+        "Du har minimum 5 års erfaring fra IT-support.",
+        "Du har 5-7 års erfaring.",
+        "Krav: 5+ years of experience.",
+        "Du har minimum 2 års erfaring. I tillegg minimum 6 års erfaring fra drift.",  # largest number counts
+    ):
+        assert years(desc, "it") == (-10, True), desc
+        assert years(desc, "warehouse") == (-10, True), desc
