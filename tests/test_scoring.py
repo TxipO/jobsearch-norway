@@ -1102,3 +1102,19 @@ def test_vikariat_two_year_and_long_month_forms_count_as_long():
     assert short("<p>Stillingen krever minst 2 års erfaring.</p>") is True
     assert short("<p>Vi har barn fra 1-2 år og stillingen er ledig.</p>") is True
     assert short("<p>Vi søker en vikar.</p>") is True
+
+
+def test_vikar_and_deltid_title_words_add_no_warehouse_points_or_relevance():
+    """2026-10-22, user: "Не треба, якщо вікарь менше року часу" (and he wants 100%
+    extent). A bare vikar/deltid TITLE word used to give +6 and open warehouse
+    relevance for ~1000 school/kindergarten/shop ads; a real warehouse keyword
+    still does."""
+    for title in ("Tilkallingsvikar barnehage", "Vikariat som assistent", "Butikkmedarbeider deltid"):
+        _, bd = _score(title, "<p>Vi søker en blid person.</p>")
+        assert bd["track_general_entry_level"]["points"] == 0, title
+        assert bd["context_gate"]["matched"] is True, title  # not relevant
+    # vikar + a real warehouse word: counted once for the body/title keyword, not for vikar
+    _, bd = _score("Vikar lagermedarbeider", "<p>Vi søker en blid person.</p>")
+    assert bd["track_general_entry_level"]["points"] == 12  # lagermedarbeider body + title
+    assert bd["track_general_entry_level"]["matched"] == ["lagermedarbeider"]
+    assert bd["context_gate"]["matched"] is False

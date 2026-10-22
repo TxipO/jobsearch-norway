@@ -123,7 +123,7 @@ GENERAL_ENTRY_KEYWORDS = [
 # requirement is now a full exclusion, and a soft mention shouldn't earn a
 # bonus for a certificate the user doesn't have either.
 #
-# "vikar"/"deltid" moved OUT to GENERAL_ENTRY_TITLE_KEYWORDS below
+# "vikar"/"deltid" were moved OUT to a title-only list
 # 2026-08-29 — same "bare word needs to describe the position itself, not
 # just appear somewhere in the body" lesson as junior/trainee
 # (ENTRY_LEVEL_TITLE_KEYWORDS above). Live audit: "vikar" matched 2377
@@ -134,7 +134,15 @@ GENERAL_ENTRY_KEYWORDS = [
 # Caught concretely on UiT's "Ledig stilling innen IT-infrastruktur"
 # (Overingeniør, 3-year project post) picking up +12 from exactly this
 # boilerplate.
-GENERAL_ENTRY_TITLE_KEYWORDS = ["vikar", "deltid"]
+# That title-only list (GENERAL_ENTRY_TITLE_KEYWORDS = ["vikar", "deltid"]) is
+# GONE (2026-10-22): a vikar/deltid TITLE gave +6 and alone opened warehouse
+# relevance (measured: 1006 visible titles hold one; 974 of them had no other
+# warehouse signal - school/kindergarten tilkallingsvikar, butikk/vekter deltid,
+# "Vikariat: Klaverpedagog"; removing it moves 447 visible warehouse scores by
+# -1..-22 and none in the IT profile). The user, on whether short
+# part-time/substitute work should rank: «Не треба, якщо вікарь менше року часу»
+# - and he wants 100% extent. A real warehouse keyword or NAV category still makes
+# such a row relevant.
 # Customer-service words describe an office/call-centre/shop job, not
 # warehouse or production work, so a TITLE hit no longer counts double or opens
 # warehouse relevance (2026-10-22). Measured on the 42 visible titles holding
@@ -960,11 +968,10 @@ def _score_profiles(
     # permanent decision (see jobsearch-norway-profile memory), independent
     # of which profile is active.
     entry_hits, entry_kw = _count_keyword_hits(text, GENERAL_ENTRY_KEYWORDS)
-    entry_title_hits = [kw for kw in GENERAL_ENTRY_TITLE_KEYWORDS if kw in title_l]
     # Title match counts double and opens relevance - except the customer-service
     # words (ENTRY_TITLE_EXEMPT_KEYWORDS).
     entry_kw_in_title = sum(1 for kw in entry_kw if kw in title_l and kw not in ENTRY_TITLE_EXEMPT_KEYWORDS)
-    entry_track_score_if_wh = min((entry_hits + len(entry_title_hits) + entry_kw_in_title) * 6, 30)
+    entry_track_score_if_wh = min((entry_hits + entry_kw_in_title) * 6, 30)
 
     dev_hits, dev_kw = _count_keyword_hits(text, DEV_SECURITY_KEYWORDS)
     dev_score_if_it = min(dev_hits * 3, 15)
@@ -1113,10 +1120,10 @@ def _score_profiles(
             # "customer service"). About 7 real production titles ("Fabrikkoperatør",
             # "Gjenbruksoperatør") lose the gate too but scored <= 16 anyway. So:
             # a keyword in the title (not on an advisory title, _ADVISORY_TITLE_RE),
-            # a vikar/deltid title word, or two different keywords anywhere.
+            # or two different keywords anywhere (a vikar/deltid title word no longer
+            # counts, 2026-10-22 - see GENERAL_ENTRY_KEYWORDS).
             entry_relevant = (
                 (entry_kw_in_title > 0 and not _ADVISORY_TITLE_RE.search(title_l))
-                or bool(entry_title_hits)
                 or entry_hits >= 2
             )
             relevant = entry_relevant or (category_bonus > 0 and not _PROFESSIONAL_TITLE_RE.search(title_l))
@@ -1127,7 +1134,7 @@ def _score_profiles(
             "language_bonus": {"points": language_score, "language": language},
             "track_it_support": {"points": it_score, "matched": list(it_kw)},
             "nav_it_operations": {"points": nav_it_ops_points, "matched": nav_it_ops},
-            "track_general_entry_level": {"points": entry_track_score, "matched": entry_kw + entry_title_hits},
+            "track_general_entry_level": {"points": entry_track_score, "matched": entry_kw},
             "track_dev_security": {"points": dev_score, "matched": list(dev_kw)},
             "dev_title_penalty": {"points": dev_title_penalty, "matched": is_dev_title},
             "entry_level_bonus": {"points": entry_level_bonus, "matched": is_entry_level},
