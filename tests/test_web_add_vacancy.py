@@ -253,3 +253,38 @@ def test_add_vacancy_status_propagates_to_cross_source_twin(tmp_path, monkeypatc
     )
     assert db.get_vacancy(conn, "linkedin-4459840887")["user_status"] == "applied"
     assert db.get_vacancy(conn, "nav-1")["user_status"] == "applied"
+
+
+def test_linkedin_url_check_rejects_parser_differential_bypasses(monkeypatch):
+    """urlparse reads host linkedin.com from "https://evil.com\\@www.linkedin.com/x"
+    but requests connects to evil.com. Nothing may be fetched for these."""
+    calls = []
+    monkeypatch.setattr(web_app.requests, "get", lambda *a, **kw: calls.append(a) or _FakeResponse(""))
+    for url in (
+        "https://evil.com\\@www.linkedin.com/x",
+        "https://evil.com\\.linkedin.com/x",
+        "https://linkedin.com@evil.com/",
+        "https://user@www.linkedin.com/jobs/view/1/",
+        "https://www.linkedin.com:pw@evil.com/",
+        "https://linkedin.com.evil.com/",
+        "https://www.linkedin.com:8443/jobs/view/1/",
+        "https://www.linkedin.com:80/jobs/view/1/",
+        "https://www.linkedin.com:abc/jobs/view/1/",
+        "https://www.linkedin.com\t/jobs/view/1/",
+        "https://www.linkedin.com/jobs/view/1/\n",
+        "https://www.linkedin.com /jobs/view/1/",
+        "",
+    ):
+        with pytest.raises(ValueError):
+            web_app.fetch_linkedin_preview(url)
+    assert calls == []
+
+
+def test_linkedin_url_check_accepts_normal_urls():
+    for url in (
+        "https://www.linkedin.com/jobs/view/4459840887/",
+        "https://LinkedIn.com/jobs/view/1",
+        "https://no.linkedin.com/jobs/view/1/?trk=x",
+        "https://www.linkedin.com:443/jobs/view/1/",
+    ):
+        assert web_app._is_linkedin_https_url(url), url

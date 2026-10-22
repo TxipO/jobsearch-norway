@@ -347,12 +347,25 @@ LINKEDIN_FETCH_USER_AGENT = (
 
 
 def _is_linkedin_https_url(url: str) -> bool:
-    try:
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
-    except ValueError:
+    """True only if BOTH urlparse and the URL `requests` will really connect to
+    agree on an https linkedin.com host. urlparse and requests/urllib3 disagree
+    on backslashes: "https://evil.com\\@www.linkedin.com/x" parses as host
+    linkedin.com but is fetched from evil.com. So backslashes, whitespace/
+    control chars, userinfo and non-default ports are rejected outright, and
+    the prepared URL is re-parsed and re-checked."""
+    if not url or "\\" in url or any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url):
         return False
-    return parsed.scheme == "https" and (host == "linkedin.com" or host.endswith(".linkedin.com"))
+    try:
+        for candidate in (url, requests.Request("GET", url).prepare().url):
+            parsed = urlparse(candidate)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme != "https" or "@" in parsed.netloc or parsed.port not in (None, 443):
+                return False
+            if host != "linkedin.com" and not host.endswith(".linkedin.com"):
+                return False
+    except Exception:  # urlparse ValueError (bad port/IPv6) or requests InvalidURL
+        return False
+    return True
 
 
 def fetch_linkedin_preview(url: str) -> dict:
