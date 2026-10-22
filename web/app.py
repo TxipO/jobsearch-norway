@@ -866,7 +866,8 @@ def vacancy_detail(request: Request, uuid: str):
 
 @app.get("/vacancy/{uuid}/document/{filename}")
 def download_document(uuid: str, filename: str):
-    if filename not in GENERATED_DOC_NAMES:
+    # A NUL in uuid makes Path.resolve()/exists() raise ValueError -> 500.
+    if filename not in GENERATED_DOC_NAMES or "\x00" in uuid:
         return HTMLResponse("Not found", status_code=404)
     path = (GENERATED_DIR / uuid / filename).resolve()
     # uuid is a path component built from an external source (NAV/Jobbnorge/

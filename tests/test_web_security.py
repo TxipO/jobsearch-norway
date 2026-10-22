@@ -459,3 +459,98 @@ def test_error_text_masks_project_root_and_home_dir():
             assert str(Path.home()) not in text and str(root) not in text, text
             assert str(Path.home()).replace("\\", "\\\\") not in text, text
             assert type(e).__name__ in text
+
+
+# --- /vacancy/{uuid}/document/{filename}: nothing outside GENERATED_DIR is ever served ---
+
+SECRET = b"TOP-SECRET-OUTSIDE-GENERATED-DIR"
+
+
+@pytest.fixture
+def generated(tmp_path, monkeypatch):
+    gen = (tmp_path / "generated").resolve()
+    (gen / "v1").mkdir(parents=True)
+    (gen / "v1" / "cv.pdf").write_bytes(b"%PDF-mine")
+    # Decoys outside GENERATED_DIR that traversal would reach: tmp/cv.pdf, tmp/secret.txt
+    (tmp_path / "cv.pdf").write_bytes(SECRET)
+    (tmp_path / "soknad.pdf").write_bytes(SECRET)
+    (tmp_path / "secret.txt").write_bytes(SECRET)
+    monkeypatch.setattr(web_app, "GENERATED_DIR", gen)
+    return gen
+
+
+def test_document_happy_path(tmp_db, generated):
+    status, _, body = _asgi_full("GET", "/vacancy/v1/document/cv.pdf", HOST)
+    assert (status, body) == (200, b"%PDF-mine")
+
+
+BS = chr(92)  # backslash, spelled out so no tool/shell layer can mangle escapes
+NUL = chr(0)
+
+
+@pytest.mark.parametrize("uuid", [
+    "..", f"..{BS}", f"..{BS}..", "../..", "%2e%2e", "..%2f", "..%5c", "....//", ".", "",
+    "C:", f"C:{BS}Windows", "/etc", f"{BS}{BS}host{BS}share", "v1/../..", f"v1{BS}..{BS}..", f"v1{NUL}", "~",
+])
+@pytest.mark.parametrize("filename", ["cv.pdf", "soknad.pdf"])
+def test_document_uuid_traversal_never_serves_outside_files(tmp_db, generated, uuid, filename):
+    status, _, body = _asgi_full("GET", f"/vacancy/{uuid}/document/{filename}", HOST)
+    assert status in (400, 404)
+    assert SECRET not in body
+
+
+@pytest.mark.parametrize("filename", [
+    "secret.txt", "../secret.txt", f"..{BS}secret.txt", "..%2fsecret.txt", "%2e%2e%2fsecret.txt",
+    "/secret.txt", f"C:{BS}secret.txt", "cv.pdf.bak", "CV.PDF", "cv.pdf ", f"cv.pdf{NUL}.txt", "cv.docx", "..", "",
+])
+def test_document_filename_outside_allowlist_is_404(tmp_db, generated, filename):
+    status, _, body = _asgi_full("GET", f"/vacancy/v1/document/{filename}", HOST)
+    assert status in (400, 404)
+    assert SECRET not in body
+    assert web_app.GENERATED_DOC_NAMES == ("cv.pdf", "soknad.pdf")
+
+
+def test_document_symlink_escape_is_blocked(tmp_db, generated, tmp_path):
+    link = generated / "linked"
+    try:
+        link.symlink_to(tmp_path, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not permitted here")
+    status, _, body = _asgi_full("GET", "/vacancy/linked/document/cv.pdf", HOST)
+    assert status == 404 and SECRET not in body
+
+
+# --- POST /sync single-flight, through the middleware stack ---
+
+def test_concurrent_sync_returns_409_through_middleware(tmp_db, monkeypatch):
+    import threading
+
+    started, release = threading.Event(), threading.Event()
+
+    def blocking_nav(conn):
+        started.set()
+        release.wait(10)
+        return {"new": 1}
+
+    _stub_sync_pipeline(monkeypatch, nav=blocking_nav)
+    first = threading.Thread(target=web_app.trigger_sync)
+    first.start()
+    try:
+        assert started.wait(10)
+        sources = []
+        monkeypatch.setattr(web_app.jobbnorge_client, "sync", lambda conn: sources.append(1) or {})
+        headers = {**HOST, "Origin": "http://127.0.0.1:8000"}
+        status, resp_headers, body = _asgi_full("POST", "/sync", headers)
+        assert status == 409
+        assert json.loads(body) == {"error": "sync already running"}
+        assert resp_headers["x-frame-options"] == "DENY"
+        assert sources == []
+        # A cross-origin POST is stopped by the guard, not mistaken for a running-sync 409.
+        status, _, _ = _asgi_full("POST", "/sync", {**HOST, "Origin": "https://evil.example"})
+        assert status == 403
+    finally:
+        release.set()
+        first.join(10)
+    assert not first.is_alive()
+    status, resp_headers, _ = _asgi_full("POST", "/sync", {**HOST, "Origin": "http://127.0.0.1:8000"})
+    assert status == 303 and resp_headers["location"] == "/"
