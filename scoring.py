@@ -538,6 +538,53 @@ TIER_2_MUNICIPALS = {
 }
 TIER_2_BONUS = 10
 
+# Place names (poststed) -> the tier municipality they belong to, 2026-10-22.
+# finn/LinkedIn/Jobbnorge rows keep the advertised place name in `municipal`
+# ("VIK I SOGN" x3, KAUPANGER, GAUPNE; Fyllingsdalen, Nesttun, Isdalstø,
+# Laksevåg, Kokstad... ~100 Bergen-area rows), so the tier sets above never
+# matched them: Sogn places got the Vestland 7 instead of 15, Bergen suburbs 7
+# instead of 10 (and the Sogn ones were wrongly charged the relocation penalty).
+# Source: Posten/Bring's official postal-code registry, the same file
+# jobbnorge_client.fetch_poststed_to_municipality() reads, filtered to the
+# municipalities of the two tiers and fetched 2026-10-22 - nothing here is
+# guessed. Applied only for county Vestland, because several of these words are
+# also place names elsewhere ("Os", "Ask", "Seim", "Fusa").
+_TIER_PLACE_NAMES = {
+    "SOGNDAL": ("FARDAL", "FJÆRLAND", "KAUPANGER", "SLINDA"),
+    "LUSTER": ("FORTUN", "GAUPNE", "HAFSLO", "HØYHEIMSVIK", "JOSTEDAL", "MARIFJØRA", "ORNES",
+               "SKJOLDEN", "SOLVORN", "VEITASTROND"),
+    "VIK": ("FEIOS", "FRESVIK", "VANGSNES", "VIK I SOGN"),
+    "HØYANGER": ("BJORDAL", "KYRKJEBØ", "LAVIK", "NESSANE", "VADHEIM"),
+    "ÅRDAL": ("ÅRDALSTANGEN", "ØVRE ÅRDAL"),
+    "AURLAND": ("FLÅM", "GUDVANGEN", "MYRDAL", "UNDREDAL"),
+    "LÆRDAL": ("BORGUND", "FRØNNINGEN"),
+    "BERGEN": ("ARNATVEIT", "BJØRNDALSTRÆ", "BLOMSTERDALEN", "BREISTEIN", "BØNES", "EIDSVÅG I ÅSANE",
+               "EIDSVÅGNESET", "ESPELAND", "FANA", "FLAKTVEIT", "FYLLINGSDALEN", "GARNES", "GODVIK",
+               "HAUKELAND", "HJELLESTAD", "HORDVIK", "HYLKJE", "INDRE ARNA", "KALANDSEIDET", "KOKSTAD",
+               "LAKSEVÅG", "LODDEFJORD", "MATHOPEN", "MJØLKERÅEN", "MORVIK", "NESTTUN", "NYBORG",
+               "OLSVIK", "PARADIS", "RÅDAL", "SALHUS", "SANDSLI", "STRAUMSGREND", "SØREIDGREND",
+               "TERTNES", "TRENGEREID", "ULSET", "YTRE ARNA", "ØVRE ERVIK"),
+    "ASKØY": ("ASK", "ERDAL", "FLORVÅG", "FOLLESE", "HAUGLANDSHELLA", "HERDLA", "HETLEVIK",
+              "KJERRGARDEN", "KLEPPESTØ", "STRUSSHAMN"),
+    "ØYGARDEN": ("BJØRØYHAMN", "BRATTHOLMEN", "FJELL", "GLESVÆR", "HELLESØY", "HERNAR", "KLOKKARVIK",
+                 "KNARREVIK", "KOLLTVEIT", "MISJE", "RONG", "SKOGSVÅG", "STEINSLAND", "STRAUME",
+                 "TELAVÅG", "TJELDSTØ", "TURØY", "ÅGOTNES"),
+    "ALVER": ("ALVERSUND", "BØVÅGEN", "EIKANGERVÅG", "FREKHAUG", "HJELMÅS", "HUNDVIN", "ISDALSTØ",
+              "LINDÅS", "MANGER", "MONGSTAD", "MYKING", "OSTEREIDET", "ROSSLAND", "SEIM", "SLETTA",
+              "SÆBØVÅGEN", "VIKANES"),
+    "OSTERØY": ("BRUVIK", "FOTLANDSVÅG", "HAUS", "LONEVÅG", "TYSSEBOTNEN", "VALESTRANDSFOSSEN"),
+    "VAKSDAL": ("DALEKVAM", "EIDSLANDET", "STAMNES", "STANGHELLE"),
+    "SAMNANGER": ("TYSSE", "ÅRLAND"),
+    "BJØRNAFJORDEN": ("BALDERSHEIM", "EIKELANDSOSEN", "FUSA", "HAGAVIK", "HOLMEFJORD", "LEPSØY",
+                      "LYSEKLOSTER", "NORDSTRØNO", "NORDTVEITGREND", "OS", "STRANDVIK", "SÆVAREID",
+                      "SØFTELAND"),
+    "AUSTEVOLL": ("BAKKASUND", "BEKKJARVIK", "KOLBEINSVIK", "LITLAKALSØY", "MØKSTER", "STOLMEN",
+                  "STOREBØ", "TORANGSVÅG", "VESTRE VINNESVÅG"),
+}
+PLACE_TO_TIER_MUNICIPAL = {
+    place: muni for muni, places in _TIER_PLACE_NAMES.items() for place in places
+}
+
 # Relocation-worthiness penalty — user-requested 2026-08-29: within
 # TIER_1_MUNICIPALS (or remote — no physical move needed either way), a
 # short/part-time contract is a fine way to earn locally. Beyond that, it's
@@ -921,8 +968,10 @@ def _score_profiles(
     is_remote = _keyword_present_unnegated(text, REMOTE_KEYWORDS) or "/hybrid)" in title_l
     remote_score = 15 if is_remote else 0
 
-    municipal_u = (municipal or "").upper()
+    municipal_u = (municipal or "").strip().upper()
     county_u = (county or "").upper()
+    if county_u == "VESTLAND":
+        municipal_u = PLACE_TO_TIER_MUNICIPAL.get(municipal_u, municipal_u)
     if municipal_u in TIER_1_MUNICIPALS:
         location_score = 15
         location_reason = f"kommune {municipal}: Sogndal/Sogn-regionen"

@@ -1020,3 +1020,41 @@ def test_retail_title_penalty_not_double_counted_and_no_lookalikes():
                   "Vi søker en lagersjef", "IT-konsulent"):
         _, bd = _score(title, "<p>Vi søker deg.</p>")
         assert bd["occupation_category_bonus"]["points"] == 0, title
+
+
+def test_place_names_resolve_to_their_tier_municipality():
+    """2026-10-22 live: "VIK I SOGN" x3, KAUPANGER, GAUPNE got the Vestland 7
+    instead of Sogn's 15; Bergen suburbs (Fyllingsdalen, Nesttun, Isdalstø...,
+    ~160 rows) 7 instead of 10. Names are from the official postal registry."""
+    for place, want in [
+        ("Vik i Sogn", 15), ("VIK I SOGN", 15), ("Kaupanger", 15), ("Gaupne", 15), ("Flåm", 15),
+        ("Fyllingsdalen", 10), ("Nesttun", 10), ("Isdalstø", 10), ("Laksevåg", 10), ("Kokstad", 10),
+        ("Lonevåg", 10), ("Os", 10),
+    ]:
+        for county in ("Vestland", "VESTLAND"):
+            _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal=place, county=county)
+            assert bd["location_bonus"]["points"] == want, place
+
+
+def test_place_name_aliases_need_county_vestland_and_leave_others_alone():
+    # "Os" is a place name elsewhere too (Innlandet) - no alias outside Vestland.
+    _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal="Os", county="Innlandet")
+    assert bd["location_bonus"]["points"] == 0
+    _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal="Kaupanger", county=None)
+    assert bd["location_bonus"]["points"] == 0
+    # A Vestland place outside both tiers is still the plain Vestland 7.
+    _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal="Sandane", county="Vestland")
+    assert bd["location_bonus"]["points"] == 7
+    # Official names are untouched.
+    _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal="Sogndal", county="Vestland")
+    assert bd["location_bonus"]["points"] == 15
+
+
+def test_sogn_place_name_is_local_for_the_relocation_penalty():
+    """A part-time Kaupanger post is local (Sogndal): no relocation penalty."""
+    _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal="Kaupanger", county="Vestland",
+                   extent_percent=50)
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
+    _, bd = _score("Lagermedarbeider", "<p>Vi søker deg.</p>", municipal="Fyllingsdalen", county="Vestland",
+                   extent_percent=50)
+    assert bd["relocation_worthiness_penalty"]["points"] == -40
