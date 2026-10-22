@@ -132,8 +132,8 @@ def _origin_of(url_value: str) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}".lower()
 
 
-@app.middleware("http")
-async def local_only_guard(request: Request, call_next):
+def _guard_response(request: Request) -> JSONResponse | None:
+    """The guard's own rejection (400/403), or None to let the request through."""
     host_header = request.headers.get("host", "")
     # urlparse handles "host:port" and "[::1]:port" uniformly.
     hostname = (urlparse(f"//{host_header}").hostname or "").lower()
@@ -150,7 +150,21 @@ async def local_only_guard(request: Request, call_next):
             # and is rejected — correct, it's never our own page.
             if claimed.lower() != own:
                 return JSONResponse({"detail": "Cross-origin request blocked"}, status_code=403)
-    return await call_next(request)
+    return None
+
+
+# Clickjacking: a page that frames http://127.0.0.1:8000 would otherwise get
+# same-origin (Origin-guard-passing) clicks/POSTs on the user's behalf. Set on
+# EVERY response, including the guard's own 400/403. Deliberately no broader
+# CSP — the templates rely on inline scripts/styles, HTMX and web fonts.
+FRAME_BLOCK_HEADERS = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
+
+
+@app.middleware("http")
+async def local_only_guard(request: Request, call_next):
+    response = _guard_response(request) or await call_next(request)
+    response.headers.update(FRAME_BLOCK_HEADERS)
+    return response
 
 
 _URL_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):")

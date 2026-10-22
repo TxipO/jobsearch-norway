@@ -18,6 +18,12 @@ from web import app as web_app
 
 def _asgi(method, path, headers=None, body=b""):
     """Minimal ASGI round trip -> (status, response_body_bytes)."""
+    status, _, out_body = _asgi_full(method, path, headers, body)
+    return status, out_body
+
+
+def _asgi_full(method, path, headers=None, body=b""):
+    """ASGI round trip -> (status, response_headers_dict_lowercased, body_bytes)."""
     hdrs = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     if body:
         hdrs.append((b"content-type", b"application/x-www-form-urlencoded"))
@@ -27,7 +33,7 @@ def _asgi(method, path, headers=None, body=b""):
         "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": b"",
         "headers": hdrs, "server": ("127.0.0.1", 8000), "client": ("127.0.0.1", 50000),
     }
-    out = {"status": None, "body": b""}
+    out = {"status": None, "headers": {}, "body": b""}
 
     async def receive():
         return {"type": "http.request", "body": body, "more_body": False}
@@ -35,11 +41,12 @@ def _asgi(method, path, headers=None, body=b""):
     async def send(msg):
         if msg["type"] == "http.response.start":
             out["status"] = msg["status"]
+            out["headers"] = {k.decode().lower(): v.decode() for k, v in msg.get("headers", [])}
         elif msg["type"] == "http.response.body":
             out["body"] += msg.get("body", b"")
 
     asyncio.run(web_app.app(scope, receive, send))
-    return out["status"], out["body"]
+    return out["status"], out["headers"], out["body"]
 
 
 @pytest.fixture
@@ -385,3 +392,36 @@ def test_backup_sqlite_error_does_not_block_the_sync(tmp_db, monkeypatch):
     summary = web_app.trigger_sync()
     assert summary["backup_failed"] == "DatabaseError: file is not a database"
     assert summary["stage_errors"] == []
+
+
+def _assert_frame_blocked(headers):
+    assert headers.get("x-frame-options") == "DENY"
+    assert headers.get("content-security-policy") == "frame-ancestors 'none'"
+
+
+def test_every_response_forbids_framing(tmp_db, monkeypatch):
+    """Clickjacking: a page framing the local app would get Origin-guard-passing
+    clicks. Headers must ride on normal, 404, guard 400/403 and 409 responses."""
+    status, headers, _ = _asgi_full("GET", "/", HOST)
+    assert status == 200
+    _assert_frame_blocked(headers)
+
+    status, headers, _ = _asgi_full("GET", "/no-such-page", HOST)
+    assert status == 404
+    _assert_frame_blocked(headers)
+
+    status, headers, _ = _asgi_full("GET", "/", {"Host": "attacker.example:8000"})
+    assert status == 400
+    _assert_frame_blocked(headers)
+
+    status, headers, _ = _asgi_full("POST", "/sync", {**HOST, "Origin": "https://evil.example"})
+    assert status == 403
+    _assert_frame_blocked(headers)
+
+    assert web_app._sync_lock.acquire(blocking=False)
+    try:
+        status, headers, _ = _asgi_full("POST", "/sync", {**HOST, "Origin": "http://127.0.0.1:8000"})
+    finally:
+        web_app._sync_lock.release()
+    assert status == 409
+    _assert_frame_blocked(headers)
