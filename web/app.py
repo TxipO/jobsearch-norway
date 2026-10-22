@@ -562,7 +562,18 @@ def _safe_sync(source_fn, conn) -> dict:
         # str(e) alone is often empty or cryptic (KeyError('uuid') -> "'uuid'").
         name = getattr(source_fn, "__module__", None) or repr(source_fn)
         logger.exception("Sync source %s failed", name)
-        return {"error": f"{type(e).__name__}: {e}"}
+        return {"error": _error_text(e)}
+
+
+def _error_text(e: Exception) -> str:
+    """Type: message, for the stored sync summary that the UI shows. OSError
+    texts embed absolute paths (FileNotFoundError names the full file), so the
+    project root and home dir are masked before the text is persisted."""
+    text = f"{type(e).__name__}: {e}"
+    for root, mask in ((Path(__file__).parent.parent, "<project>"), (Path.home(), "~")):
+        for variant in (str(root), str(root).replace("\\", "\\\\"), root.as_posix()):
+            text = text.replace(variant, mask)
+    return text
 
 
 def _safe_stage(name: str, fn, stage_errors: list, default=0, conn=None):
@@ -581,7 +592,7 @@ def _safe_stage(name: str, fn, stage_errors: list, default=0, conn=None):
                 conn.rollback()
             except Exception:
                 pass
-        stage_errors.append({"stage": name, "error": f"{type(e).__name__}: {e}"})
+        stage_errors.append({"stage": name, "error": _error_text(e)})
         return default
 
 
@@ -633,7 +644,7 @@ def _run_sync() -> dict:
         db.backup_db()
     except (OSError, sqlite3.Error) as e:
         logger.exception("DB backup failed")
-        backup_failed = f"{type(e).__name__}: {e}"
+        backup_failed = _error_text(e)
 
     conn = get_conn()
     # Read before overwriting: this becomes the "new since" watermark for the

@@ -445,3 +445,17 @@ def test_parse_int_param():
     assert web_app._parse_int_param(" 7 ") == 7
     for bad in ("²", "١٢", "-1", "", "1" * 10, "1e3"):
         assert web_app._parse_int_param(bad) is None, bad
+
+
+def test_error_text_masks_project_root_and_home_dir():
+    """OSError messages embed the full path; the stored sync summary is shown
+    in the UI, so the Windows username must not be in it."""
+    from pathlib import Path
+
+    root = Path(web_app.__file__).parent.parent
+    for p in (root / "credentials" / "x.json", Path.home() / "elsewhere" / "y.txt"):
+        for e in (FileNotFoundError(2, "No such file or directory", str(p)), RuntimeError(f"bad {p}")):
+            text = web_app._error_text(e)
+            assert str(Path.home()) not in text and str(root) not in text, text
+            assert str(Path.home()).replace("\\", "\\\\") not in text, text
+            assert type(e).__name__ in text

@@ -73,7 +73,7 @@ class GmailAuthError(Exception):
 def _load_credentials() -> tuple[str, str]:
     if not CREDENTIALS_PATH.exists():
         raise GmailAuthError(
-            f'No Gmail app-password file at {CREDENTIALS_PATH}. Create it with:\n'
+            f'No Gmail app-password file at credentials/{CREDENTIALS_PATH.name}. Create it with:\n'
             f'{{"email": "you@gmail.com", "app_password": "xxxx xxxx xxxx xxxx"}}\n'
             f"(app_password from myaccount.google.com/apppasswords, requires "
             f"2-Step Verification enabled on that account)."

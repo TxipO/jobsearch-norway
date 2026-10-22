@@ -8,6 +8,8 @@ import email.message
 import imaplib
 import json
 
+import pytest
+
 import gmail_client as gc
 
 
@@ -231,3 +233,14 @@ def test_failed_batch_fetch_falls_back_to_one_by_one(tmp_path, monkeypatch):
 
     assert [t.strip() for t in texts] == ["one", "two", "three"]
     assert len(fake.fetch_calls) == 1 + 3
+
+
+def test_missing_credentials_message_has_no_absolute_path(tmp_path, monkeypatch):
+    """The message lands in the sync summary shown in the UI: it must not
+    leak the drive letter / home dir (Windows username) of the checkout."""
+    monkeypatch.setattr(gc, "CREDENTIALS_PATH", tmp_path / "gmail_app_password.json")
+    with pytest.raises(gc.GmailAuthError) as exc:
+        gc.fetch_plain_texts("from:finn.no")
+    msg = str(exc.value)
+    assert str(tmp_path) not in msg and str(tmp_path.anchor) not in msg
+    assert "Users" not in msg and "gmail_app_password.json" in msg
