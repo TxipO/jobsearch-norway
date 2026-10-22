@@ -361,6 +361,38 @@ traces to a real incident in this project, not a hypothetical.
     compare with the last known timing; a stage that grew more than ~20%
     needs a reason or a fix.
 
+16. **An abort/give-up path that advances a cursor past work it never
+    attempted.** A circuit breaker, a cancelled pool or a "give up after N
+    holds" rule is only safe if the cursor/watermark moves ONLY when every
+    item behind it was either handled or deliberately written off.
+    **Live bug, found 2026-10-22 (review, reproduced):** `nav_client` tripped
+    its breaker on 5 fast-failing ads at the head of a long sealed page,
+    cancelled the pool, and after 3 held syncs gave the failing ads up — then
+    advanced the cursor with `page_detail_errors == 0`; the 300 good ads that
+    were never attempted were lost. **The check:** for every early-exit /
+    cancel / give-up branch, list the items it leaves unprocessed and what
+    holds the cursor for them; write the repro as a test (N bad + M good).
+17. **`ON CONFLICT DO UPDATE SET col = excluded.col` for a source that does
+    not supply `col`.** A partially-populated source silently NULLs whatever
+    another stage had filled. **Live bug, found 2026-10-22:** digest rows
+    (finn/LinkedIn) carry no description, so every sync reset `language` to
+    NULL for rows that had a borrowed description — English ads lost the
+    +10 bonus and the language filter for weeks (96 of 98 rows); `sector`
+    was wiped the same way. **The check:** for each upsert, compare the SET
+    list with the fields each caller actually provides; use COALESCE / CASE
+    for the rest.
+18. **A test that reverts its own isolation and then touches the live DB.**
+    `monkeypatch.undo()` reverts EVERY patch, including the fixture's tmp-db
+    one. **Live incident, found 2026-10-22:** from 2026-10-20 every full
+    test run ran the real delete/retire/auto-ignore stages and overwrote the
+    real "last sync" summary and watermark in `data/jobsearch.db` (the UI
+    showed a fake sync; the next real sync would have lost the "new since"
+    badges). Now guarded in `tests/conftest.py` (default-path guards + a
+    session-end backstop that fails the run if the live DB file changed).
+    **The check:** `monkeypatch.undo()` must not appear in tests (use
+    `monkeypatch.context()`); after any test-suite run the live DB mtime must
+    be unchanged — the suite now fails if it is not.
+
 # Stage 3 — Security & privacy lens
 
 Project-specific surface — this app has no auth/session/multi-tenant layer
