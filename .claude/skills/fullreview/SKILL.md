@@ -112,7 +112,7 @@ pass found.
 pattern: print\(
 glob: **/*.py
 ```
-Exclude `sync.py`/`test_gmail.py`'s intentional progress prints. Flag
+Exclude `sync.py`/`scripts/test_gmail.py`'s intentional progress prints. Flag
 `print(` inside library modules (`db.py`, `nav_client.py`, `gmail_client.py`)
 that reads like leftover debugging.
 
