@@ -440,10 +440,19 @@ def fetch_linkedin_preview(url: str) -> dict:
     return {"title": title, "business_name": employer, "municipal": municipal, "county": county}
 
 
+def _parse_int_param(raw: str) -> int | None:
+    """Query-string int, or None (= no filter / page 1) for anything else.
+    str.isdigit() accepts "²" (int() then raises -> 500) and Arabic-Indic
+    digits; isdecimal()+isascii() is plain 0-9 only. The length cap keeps the
+    value inside SQLite's 64-bit bind range (a huge number -> OverflowError)."""
+    s = (raw or "").strip()
+    return int(s) if s.isascii() and s.isdecimal() and len(s) < 10 else None
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(
     request: Request, user_status: list[str] = Query(default=[]), language: str = "", q: str = "",
-    source: str = "", show_excluded: str = "", page: int = 1,
+    source: str = "", show_excluded: str = "", page: str = "1",
     min_score: str = "", min_salary: str = "", sort: str = "score",
     show_flagged: str = "", min_extent_percent: str = "", occupation_category: str = "",
 ):
@@ -451,13 +460,13 @@ def index(
     score_profile = get_score_profile(conn)
     show_excluded_flag = show_excluded == "1"
     show_flagged_flag = show_flagged == "1"
-    page = max(1, page)
     # Plain str query params instead of int, so an empty field round-trips
     # as "" (no filter) rather than FastAPI 422ing on int("") — a blank
     # filter is the resting state of these inputs, not user error.
-    min_score_val = int(min_score) if min_score.strip().isdigit() else None
-    min_salary_val = int(min_salary) if min_salary.strip().isdigit() else None
-    min_extent_percent_val = int(min_extent_percent) if min_extent_percent.strip().isdigit() else None
+    page = _parse_int_param(page) or 1
+    min_score_val = _parse_int_param(min_score)
+    min_salary_val = _parse_int_param(min_salary)
+    min_extent_percent_val = _parse_int_param(min_extent_percent)
     sort = sort if sort == "deadline" else "score"
     # active_only=True always — db._vacancy_filters bakes the "a reacted
     # vacancy stays visible even after the source closes it" exemption

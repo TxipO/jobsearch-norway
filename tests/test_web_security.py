@@ -22,7 +22,7 @@ def _asgi(method, path, headers=None, body=b""):
     return status, out_body
 
 
-def _asgi_full(method, path, headers=None, body=b""):
+def _asgi_full(method, path, headers=None, body=b"", query=""):
     """ASGI round trip -> (status, response_headers_dict_lowercased, body_bytes)."""
     hdrs = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     if body:
@@ -30,7 +30,7 @@ def _asgi_full(method, path, headers=None, body=b""):
         hdrs.append((b"content-length", str(len(body)).encode()))
     scope = {
         "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method,
-        "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": b"",
+        "scheme": "http", "path": path, "raw_path": path.encode(), "query_string": query.encode(),
         "headers": hdrs, "server": ("127.0.0.1", 8000), "client": ("127.0.0.1", 50000),
     }
     out = {"status": None, "headers": {}, "body": b""}
@@ -425,3 +425,23 @@ def test_every_response_forbids_framing(tmp_db, monkeypatch):
         web_app._sync_lock.release()
     assert status == 409
     _assert_frame_blocked(headers)
+
+
+@pytest.mark.parametrize("name", ["min_score", "min_salary", "min_extent_percent", "page"])
+@pytest.mark.parametrize("value", [
+    "%C2%B2",                                    # "²": isdigit() True, int() ValueError -> was 500
+    "%D9%A1%D9%A2%D9%A3",                        # Arabic-Indic digits
+    "99999999999999999999",                      # overflows SQLite's 64-bit bind
+    "-5", "", "abc", "1.5", "+3",
+])
+def test_index_numeric_filters_never_500(tmp_db, name, value):
+    _insert(tmp_db)
+    status, _, _ = _asgi_full("GET", "/", HOST, query=f"{name}={value}")
+    assert status == 200
+
+
+def test_parse_int_param():
+    assert web_app._parse_int_param("42") == 42
+    assert web_app._parse_int_param(" 7 ") == 7
+    for bad in ("²", "١٢", "-1", "", "1" * 10, "1e3"):
+        assert web_app._parse_int_param(bad) is None, bad
