@@ -557,3 +557,31 @@ def test_concurrent_sync_returns_409_through_middleware(tmp_db, monkeypatch):
     assert not first.is_alive()
     status, resp_headers, _ = _asgi_full("POST", "/sync", {**HOST, "Origin": "http://127.0.0.1:8000"})
     assert status == 303 and resp_headers["location"] == "/"
+
+
+def test_fonts_are_self_hosted():
+    """No page may pull fonts (or anything) from Google: it leaks that the app is
+    open and breaks offline use. Every font file the stylesheet references must
+    exist and be served from /static/ with the guard + frame headers intact."""
+    import re
+    from pathlib import Path
+
+    web_dir = Path(web_app.__file__).parent
+    for tpl in (web_dir / "templates").glob("*.html"):
+        text = tpl.read_text(encoding="utf-8")
+        assert "googleapis" not in text and "gstatic" not in text, tpl.name
+    css = (web_dir / "static" / "style.css").read_text(encoding="utf-8")
+    assert "googleapis" not in css and "gstatic" not in css
+    urls = re.findall(r"url\(\s*['\"]?(fonts/[^'\")\s]+)", css)
+    assert len(urls) >= 6 and all(u.endswith(".woff2") for u in urls)
+    for rel in urls:
+        assert (web_dir / "static" / rel).stat().st_size > 1000, rel
+    # OFL license text ships with each family.
+    assert (web_dir / "static" / "fonts" / "Inter-OFL.txt").exists()
+    assert (web_dir / "static" / "fonts" / "JetBrainsMono-OFL.txt").exists()
+
+    status, headers, body = _asgi_full("GET", "/static/" + urls[0], HOST)
+    assert status == 200 and body[:4] == b"wOF2"
+    _assert_frame_blocked(headers)
+    status, _, _ = _asgi_full("GET", "/static/" + urls[0], {"Host": "attacker.example:8000"})
+    assert status == 400
