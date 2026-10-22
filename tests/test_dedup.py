@@ -291,3 +291,50 @@ def test_duplicate_is_unhidden_logic_untouched_while_twin_still_active(tmp_path)
     rescore_all(conn)
     flags = sorted(db.get_vacancy(conn, u)["excluded"] for u in ("nav-1", "finn-1"))
     assert flags == [0, 1]
+
+
+def test_same_source_siblings_are_not_hidden_as_duplicates(tmp_path):
+    """Review 2026-10-22: two NAV ads + one Jobbnorge ad sharing employer+title+
+    municipal (live: 5 groups, e.g. 'Fagarbeider' with BOTH NAV ads hidden) are
+    not a twin set - the other-source copy duplicates at most one of the NAV ads,
+    which one is unknowable, so nothing may be hidden."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-a", "nav", "Seniorkonsulent", "UiO", "Oslo")
+    _insert(conn, "nav-b", "nav", "Seniorkonsulent", "UiO", "Oslo")
+    _insert(conn, "jobbnorge-c", "jobbnorge", "Seniorkonsulent", "UiO", "Oslo")
+
+    rescore_all(conn)
+
+    for uuid in ("nav-a", "nav-b", "jobbnorge-c"):
+        row = db.get_vacancy(conn, uuid)
+        assert not row["excluded"], (uuid, row["exclusion_reason"])
+
+
+def test_hard_blocked_same_source_sibling_still_blocks_dedup(tmp_path):
+    """The twin-set test is made on every active row: a same-source sibling that
+    is excluded for another reason still proves the key covers distinct postings."""
+    conn = _make_conn(tmp_path)
+    key = _dedup_key("UiO", "Seniorkonsulent", "Oslo")
+    for u, src in (("nav-a", "nav"), ("nav-b", "nav"), ("finn-c", "finn")):
+        _insert(conn, u, src, "Seniorkonsulent", "UiO", "Oslo")
+    cands = [
+        {"uuid": "nav-a", "score": 50, "source": "nav", "key": key, "excluded": False},
+        {"uuid": "nav-b", "score": 40, "source": "nav", "key": key, "excluded": True},
+        {"uuid": "finn-c", "score": 30, "source": "finn", "key": key, "excluded": False},
+    ]
+    assert _exclude_cross_source_duplicates(conn, cands) == 0
+    assert not db.get_vacancy(conn, "finn-c")["excluded"]
+
+
+def test_true_nav_finn_twin_pair_still_dedups_with_deterministic_keeper(tmp_path):
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "Driftsleder", "Politiet", "Oslo")
+    _insert(conn, "finn-1", "finn", "Driftsleder", "Politiet", "Oslo")
+    key = _dedup_key("Politiet", "Driftsleder", "Oslo")
+    tied = [
+        {"uuid": "finn-1", "score": 40, "source": "finn", "key": key, "excluded": False},
+        {"uuid": "nav-1", "score": 40, "source": "nav", "key": key, "excluded": False},
+    ]
+    assert _exclude_cross_source_duplicates(conn, tied) == 1
+    assert not db.get_vacancy(conn, "nav-1")["excluded"]  # source priority breaks the tie
+    assert db.get_vacancy(conn, "finn-1")["excluded"]

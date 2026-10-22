@@ -1356,8 +1356,10 @@ def rescore_all(conn) -> dict:
     user_status_synced = _propagate_user_status_across_group(conn, all_candidates)
     excluded_count += _propagate_hard_blocks_across_group(conn, all_candidates)
 
-    dedup_candidates = [c for c in all_candidates if not c["excluded"]]
-    duplicates_excluded = _exclude_cross_source_duplicates(conn, dedup_candidates)
+    # ALL candidates, not only the non-excluded ones: whether a key group is an
+    # unambiguous twin set must be judged on every active row (a hard-blocked
+    # same-source sibling still proves the key covers distinct postings).
+    duplicates_excluded = _exclude_cross_source_duplicates(conn, all_candidates)
     excluded_count += duplicates_excluded
     excluded_count += _keep_orphaned_duplicate_exclusions(conn, all_candidates, previously_duplicate)
 
@@ -1617,16 +1619,23 @@ def _exclude_cross_source_duplicates(conn, candidates: list[dict]) -> int:
     the flip itself is real: a status tracked on the twin that becomes
     hidden would otherwise look lost (see _propagate_user_status_across_group,
     the other half of this fix). source priority, then uuid, make the
-    keeper choice reproducible even when score ties."""
+    keeper choice reproducible even when score ties.
+
+    Only identity-proven groups are deduplicated (_cross_source_groups /
+    _is_unambiguous_twin_set: >= 2 sources, each at most once - the same rule
+    the status and hard-block propagation use). The raw key groups used before
+    2026-10-22 also fired for e.g. nav-a + nav-b + jobbnorge-c, where the
+    other-source copy duplicates at most ONE of the two NAV ads and the
+    highest-score pick hid DISTINCT postings as "Дублікат" (live: 5 groups,
+    "Fagarbeider" with both NAV ads hidden). `candidates` is every active row
+    (excluded ones too - they still count for the group test); already
+    excluded rows are neither keepers nor hidden again."""
     import db
 
-    groups: dict[tuple, list[dict]] = {}
-    for c in candidates:
-        groups.setdefault(c["key"], []).append(c)
-
     excluded = 0
-    for key, group in groups.items():
-        if len(group) < 2 or len({c["source"] for c in group}) < 2:
+    for group in _cross_source_groups(candidates):
+        group = [c for c in group if not c.get("excluded")]
+        if len(group) < 2:
             continue
         group.sort(key=lambda c: (
             -c["score"], _SOURCE_TIE_BREAK_PRIORITY.get(c["source"], 99), c["uuid"],
