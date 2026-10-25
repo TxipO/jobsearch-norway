@@ -970,3 +970,42 @@ def test_new_lecturer_titles_are_academic_not_pedagogical():
     for title in ("Museumslektor - Historisk museum", "Allaskuvlalektor davvisámegiela", "Høyskolelektor innen fag"):
         _, reason = check_exclusion(title, "")
         assert "PhD" in reason, title
+
+
+def test_security_clearance_english_blocked():
+    """Live gap 2026-10-25: English-language ads were never caught. Six
+    Robotics (Oslo defence drone-swarm company) "IT & Infrastructure
+    Engineer" scored 54 and was visible with "All employees ... must be
+    eligible for security clearance". Audit of 11,097 active ads: 19 new
+    matches, all genuine (Six Robotics, UiA, IFE, Kongsberg Maritime, NTNU)."""
+    bodies = [
+        "All employees at Six Robotics must be eligible for security clearance.",
+        "All employees are required to undergo a security clearance due to our "
+        "close collaboration with the Norwegian Armed Forces.",
+        "Employment is contingent upon the candidate's ability to obtain the "
+        "required security clearance.",
+        "In this role you will work with classified materials, security "
+        "clearance and export control are both required for this position.",
+    ]
+    for body in bodies:
+        excluded, reason = check_exclusion("Systemutvikler", body)
+        assert excluded, body
+        assert "sikkerhetsklarering" in reason, body
+
+
+def test_security_clearance_english_disclaimers_not_blocked():
+    """Vard ("may require ... security clearance"), Robotto ("certain
+    positions may be subject to ..."), CERN (medical clearance — no
+    "security") and an explicit "not required" must stay visible."""
+    bodies = [
+        "This employment may require a background check, or security clearance "
+        "by the Norwegian National Security Authority.",
+        "Certain positions may be subject to security-clearance or other "
+        "eligibility requirements.",
+        "The selected candidate must obtain medical clearance before a contract "
+        "offer is confirmed.",
+        "Previous authorization or clearance is not required.",
+    ]
+    for body in bodies:
+        excluded, _ = check_exclusion("Systemutvikler", body)
+        assert not excluded, body

@@ -453,6 +453,50 @@ def _has_definite_security_clearance_requirement(text: str) -> bool:
     return False
 
 
+# Fourth round of this category, 2026-10-25, and the first ENGLISH one: the
+# Norwegian regex above never sees English-language ads. Live case: Six
+# Robotics (Oslo defence drone-swarm company working with FFI), "IT &
+# Infrastructure Engineer" scored 54 and was visible with "All employees at
+# Six Robotics must be eligible for security clearance" (its other ads say
+# "are required to undergo a security clearance due to our close
+# collaboration with the norwegian armed forces"). Kept as a SEPARATE regex —
+# English needs its own guard and must not loosen the Norwegian one. The word
+# "security" before "clearance" is mandatory: CERN's "must obtain medical
+# clearance" and Monil's "market clearances" must not match. The sentence-
+# scoped guard below exists for employer-wide disclaimers — Vard Group "this
+# employment may require ... security clearance", Robotto "certain positions
+# may be subject to security-clearance". Read-only audit of 11,097
+# active ads found 19 new matches, 14 of them visible/unblocked before this
+# change (Six Robotics x11, University of Agder postdoc, IFE
+# senior scientist, Kongsberg Maritime hydrodynamicist; NTNU PhDs were
+# already excluded by other rules), all genuine requirements, zero false
+# positives; Vard, Robotto, CERN and Monil stay unmatched.
+SECURITY_CLEARANCE_EN_RE = re.compile(
+    r"(?:(?:obtain|hold|get|receive|undergo|pass|qualify for|meet)\b[^.]{0,40}\bsecurity clearance|"
+    r"eligible (?:for|to obtain)[^.]{0,20}security clearance|"
+    r"(?:requires?|requiring)\b[^.]{0,25}security clearance|"
+    r"security clearance[^.]{0,40}\b(?:is|are|will be)\b[^.]{0,10}"
+    r"(?:required|mandatory|a requirement|a prerequisite)|"
+    r"(?:subject to|conditional on|contingent (?:up)?on)[^.]{0,50}security clearance)"
+)
+_EN_CLEARANCE_SOFTENER_RE = re.compile(
+    r"\bmay |\bmight |\bcould |certain positions|certain roles|some positions|"
+    r"some roles|depending on"
+)
+_EN_CLEARANCE_NEGATED_RE = re.compile(r"not required|not a requirement")
+
+
+def _has_definite_security_clearance_requirement_en(text: str) -> bool:
+    for m in SECURITY_CLEARANCE_EN_RE.finditer(text):
+        sentence_start = text.rfind(". ", 0, m.start()) + 1  # 0 when absent
+        if _EN_CLEARANCE_SOFTENER_RE.search(text[sentence_start:m.start()]):
+            continue
+        if _EN_CLEARANCE_NEGATED_RE.search(text[m.end():m.end() + 30]):
+            continue
+        return True
+    return False
+
+
 # International relocation-recruitment ads — BPO/customer-service agencies
 # recruiting Norwegian speakers to work FROM another country entirely, not
 # Norway. These slip into NAV's feed despite the job being physically
@@ -907,7 +951,7 @@ def check_exclusion(
     if _has_body_authorisation_requirement(body_l):
         return True, "В описі прямо вимагається норвезька авторизація"
 
-    if _has_definite_security_clearance_requirement(body_l):
+    if _has_definite_security_clearance_requirement(body_l) or _has_definite_security_clearance_requirement_en(body_l):
         return True, "Потрібен допуск до державної таємниці (sikkerhetsklarering) — недосяжно без громадянства"
 
     if _has_eu_passport_requirement(body_l):
