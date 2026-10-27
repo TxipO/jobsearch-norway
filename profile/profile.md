@@ -21,7 +21,7 @@
 |---|---|---|---|---|
 | Державний університет телекомунікацій (State University of Telecommunications), Київ | Кібербезпека / Cyber Security | Bakalavr (бакалавр) | 2022 | bachelorgrad (automatisk godkjenning HK-dir) |
 | Київський державний коледж туризму та готельного господарства | Software Development | Molodshyi spetsialist (молодший спеціаліст) | 2019 | fagskole-рівень (HK-dir) |
-| Буткемп Python backend | Python backend | сертифікат курсу (6 міс.) | 2022 | — |
+| Буткемп Python backend | Python backend | сертифікат курсу (6 міс.) | 2022 | **Не згадувати в CV, листах і формах (рішення користувача 2026-10-27)** |
 | Школа (Україна) | — | базова середня, 9 класів | — | — |
 
 > Для CV: вказувати оригінальну назву ступеня + норвезький еквівалент. НЕ писати "not recognized" — це і фактично невірно (automatisk godkjenning доступна), і добровільний негатив. Джерело: HK-dir, розділ "Utdanning fra Ukraina".

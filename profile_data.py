@@ -202,15 +202,6 @@ EDUCATION = [
         "note": "Norwegian equivalent: fagskole level (HK-dir)",
         "note_no": "Norsk ekvivalent: fagskolenivå (HK-dir)",
     },
-    {
-        "degree": "Python Backend Development",
-        "degree_no": "Python backend-utvikling",
-        "institution": "6-month bootcamp",
-        "institution_no": "6 måneders kurs (bootcamp)",
-        "dates": "2022",
-        "note": "",
-        "note_no": "",
-    },
 ]
 
 # Default hard-skill list for IT-support; a tailoring step can reorder/subset
