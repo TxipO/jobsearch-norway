@@ -128,6 +128,80 @@ def test_marker_migration_backfills_only_rows_with_user_typed_content(tmp_path):
     assert marked == {"linkedin-typed-desc", "linkedin-typed-due"}
 
 
+# --- LinkedIn rows absent from every digest in the window ------------------
+
+def test_retire_linkedin_absent_deletes_only_untouched_unseen_linkedin_rows(tmp_path):
+    conn = _conn(tmp_path)
+    _add(conn, "linkedin-gone", "linkedin", 3)
+    _add(conn, "linkedin-seen", "linkedin", 3)
+    _add(conn, "linkedin-applied", "linkedin", 3, user_status="applied")
+    _add(conn, "linkedin-flagged", "linkedin", 3)
+    conn.execute("UPDATE vacancies SET flagged_at = datetime('now') WHERE uuid = 'linkedin-flagged'")
+    _add(conn, "linkedin-noted", "linkedin", 3)
+    conn.execute("UPDATE vacancies SET notes = 'ringte dem' WHERE uuid = 'linkedin-noted'")
+    _add(conn, "linkedin-manual", "linkedin", 3)
+    conn.execute("UPDATE vacancies SET manually_added = 1 WHERE uuid = 'linkedin-manual'")
+    _add(conn, "finn-gone", "finn", 3)
+    _add(conn, "nav-gone", "nav", 3)
+
+    assert db.retire_linkedin_absent_from_digests(conn, {"linkedin-seen"}) == 1
+
+    left = {r[0] for r in conn.execute("SELECT uuid FROM vacancies")}
+    assert left == {"linkedin-seen", "linkedin-applied", "linkedin-flagged", "linkedin-noted",
+                    "linkedin-manual", "finn-gone", "nav-gone"}
+    assert not db.is_dismissed(conn, "linkedin-gone")  # no tombstone: a re-mailed job returns
+
+
+def _digest(*job_ids):
+    rule = "-" * 57
+    cards = "".join(
+        f"{rule}\n\nTitle {i}\n\nAcme\n\nOslo, Norway\n\n"
+        f"View job: https://www.linkedin.com/comm/jobs/view/{i}?x=1\n\n"
+        for i in job_ids
+    )
+    return "Your job alert\n\n" + cards
+
+
+def test_linkedin_sync_retires_absent_rows_and_a_remailed_job_comes_back(tmp_path, monkeypatch):
+    conn = _conn(tmp_path)
+    monkeypatch.setattr(linkedin_client, "_build_municipality_county_map", lambda: {})
+    texts = [_digest("1", "2")]
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: texts)
+    assert linkedin_client.sync(conn)["retired_absent"] == 0
+    assert db.get_vacancy(conn, "linkedin-2") is not None
+
+    texts[:] = [_digest("1")]
+    stats = linkedin_client.sync(conn)
+    assert stats["retired_absent"] == 1
+    assert db.get_vacancy(conn, "linkedin-2") is None and db.get_vacancy(conn, "linkedin-1") is not None
+
+    texts[:] = [_digest("1", "2")]
+    linkedin_client.sync(conn)
+    assert db.get_vacancy(conn, "linkedin-2") is not None
+
+
+def test_linkedin_sync_skips_retirement_when_parse_is_not_provably_complete(tmp_path, monkeypatch):
+    conn = _conn(tmp_path)
+    monkeypatch.setattr(linkedin_client, "_build_municipality_county_map", lambda: {})
+    _add(conn, "linkedin-old", "linkedin", 3)
+
+    # No messages at all (Gmail returned nothing).
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [])
+    assert linkedin_client.sync(conn)["retired_absent"] == 0
+
+    # Messages but no readable cards (format drift).
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: ["a brand new digest layout"])
+    assert linkedin_client.sync(conn)["retired_absent"] == 0
+
+    # One card parses, one does not (parsed < cards).
+    broken = _digest("1") + "-" * 57 + "\n\nOnly a title\n\nView job: https://www.linkedin.com/comm/jobs/view/2\n\n"
+    monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [broken])
+    stats = linkedin_client.sync(conn)
+    assert stats["parsed"] < stats["cards"] and stats["retired_absent"] == 0
+
+    assert db.get_vacancy(conn, "linkedin-old") is not None
+
+
 # --- item 2: bounded Gmail query ------------------------------------------
 
 def test_digest_clients_bound_their_gmail_query(monkeypatch):

@@ -27,7 +27,7 @@ borrow-from-NAV/Jobbnorge fallback both sources rely on.
 import re
 import sqlite3
 
-from db import upsert_vacancy_row
+from db import retire_linkedin_absent_from_digests, upsert_vacancy_row
 from gmail_client import digest_query, fetch_plain_texts
 from jobbnorge_client import _build_municipality_county_map
 
@@ -59,6 +59,8 @@ _REGION_WORDS_RE = re.compile(r"^Greater\s+|\s+(?:Metropolitan\s+)?(?:Region|Are
 # starts the moment we insert it. With the 60-day window, the first sync after
 # the 2026-10-08 parser fix would have inserted 107 jobs last seen 31-60 days
 # ago as "new". 21 days still covers a three-week gap between syncs.
+# The same window defines "closed": sync() deletes untouched rows absent from
+# every digest in it (db.retire_linkedin_absent_from_digests).
 LINKEDIN_LOOKBACK_DAYS = 21
 
 
@@ -185,7 +187,15 @@ def sync(conn: sqlite3.Connection) -> dict:
     # fired for the 2026-10-08 incident: 78% of the mails parsed to nothing for
     # weeks, but a few old-format mails still parsed, so the total was never 0.
     cards = sum(len(re.findall(r"^\s*View job:", t, re.M)) for t in texts)
-    stats = {"messages": len(texts), "cards": cards, "parsed": len(entries), "upserted": upserted}
+    # A job absent from every digest in the window is closed (see
+    # LINKEDIN_LOOKBACK_DAYS) — but only trust that when the parse is provably
+    # complete: a Gmail hiccup or parser drift (2026-10-08: 89% of cards
+    # silently dropped) must never wipe the LinkedIn rows.
+    retired_absent = 0
+    if texts and cards and len(entries) == cards:
+        retired_absent = retire_linkedin_absent_from_digests(conn, seen)
+    stats = {"messages": len(texts), "cards": cards, "parsed": len(entries), "upserted": upserted,
+             "retired_absent": retired_absent}
     if texts and not cards:
         stats["warning"] = (
             f"{len(texts)} LinkedIn digest message(s) fetched but no job cards found in them — "

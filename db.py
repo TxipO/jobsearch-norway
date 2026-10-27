@@ -1162,6 +1162,35 @@ def retire_stale_digest_rows(conn: sqlite3.Connection, max_age_days: int = DIGES
     return cur.rowcount
 
 
+def retire_linkedin_absent_from_digests(conn: sqlite3.Connection, seen_uuids) -> int:
+    """Removes untouched LinkedIn rows that no digest inside the lookback window
+    (linkedin_client.LINKEDIN_LOOKBACK_DAYS) mentions any more — `seen_uuids` is
+    every uuid that sync just read. A job sits in the digests for a median of one
+    day and the mail carries no closing signal, so absence is the only sign it
+    was closed (2026-10-27: 4 of 4 jobs the user found "No longer accepting
+    applications" had dropped out of the window). Returns the number removed.
+
+    Deliberately NO tombstone (unlike retire_stale_digest_rows): the row is by
+    definition in no digest inside the window, so nothing re-inserts it, and if
+    LinkedIn mails the same id again the job is evidently open again and should
+    come back as a fresh 'new' row.
+
+    Same exemptions as retire_stale_digest_rows: only user_status='new' with no
+    flag/note and manually_added=0 is touched. The CALLER must only pass a
+    complete parse — an empty/partial `seen_uuids` would delete live rows."""
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _seen_uuids (uuid TEXT PRIMARY KEY)")
+    conn.execute("DELETE FROM _seen_uuids")
+    conn.executemany("INSERT OR IGNORE INTO _seen_uuids (uuid) VALUES (?)", [(u,) for u in seen_uuids])
+    cur = conn.execute(
+        "DELETE FROM vacancies WHERE source = 'linkedin' AND user_status = 'new' AND manually_added = 0 "
+        "AND flagged_at IS NULL AND COALESCE(notes, '') = '' "
+        "AND uuid NOT IN (SELECT uuid FROM _seen_uuids)"
+    )
+    conn.execute("DELETE FROM _seen_uuids")
+    conn.commit()
+    return cur.rowcount
+
+
 def delete_archived(conn: sqlite3.Connection) -> int:
     """"archived" ('Смітник' in the UI) is the one user_status that means
     the opposite of every other reacted status — the user explicitly wants

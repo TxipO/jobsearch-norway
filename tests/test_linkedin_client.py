@@ -173,7 +173,7 @@ def test_sync_reports_messages_and_warns_when_digest_format_drifted(tmp_path, mo
     assert "warning" in stats
 
     monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [])
-    assert linkedin_client.sync(conn) == {"messages": 0, "cards": 0, "parsed": 0, "upserted": 0}
+    assert linkedin_client.sync(conn) == {"messages": 0, "cards": 0, "parsed": 0, "upserted": 0, "retired_absent": 0}
 
     monkeypatch.setattr(linkedin_client, "fetch_digest_texts", lambda: [REAL_DIGEST_EXCERPT])
     stats = linkedin_client.sync(conn)
