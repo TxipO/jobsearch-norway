@@ -773,6 +773,34 @@ def get_vacancy(conn: sqlite3.Connection, uuid: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM vacancies WHERE uuid = ?", (uuid,)).fetchone()
 
 
+_EDITABLE_COLUMNS = (
+    "title", "business_name", "employer_name", "municipal", "county",
+    "link", "application_url", "application_due", "application_due_sort",
+)
+
+
+def update_vacancy_fields(conn: sqlite3.Connection, uuid: str, fields: dict) -> None:
+    """Manual edit from the detail page: write exactly what the form sent
+    (None clears a column) — unlike upsert_vacancy_row, whose COALESCE can
+    never blank a field. Never touches status/source/user_status. A changed
+    description becomes the user's own text: language re-detected and
+    description_borrowed_from cleared, which is what stops
+    scoring.rescore_all from replacing it with a borrow on the next sync."""
+    sets = {c: fields[c] for c in _EDITABLE_COLUMNS}
+    current = get_vacancy(conn, uuid)
+    new_desc = fields["description"]
+    if new_desc != ((current["description"] or "").strip() or None):
+        sets["description"] = new_desc
+        sets["language"] = detect_language(new_desc) if new_desc else None
+        sets["description_borrowed_from"] = None
+    # Column names come from the fixed tuple above, values are bound.
+    conn.execute(
+        f"UPDATE vacancies SET {', '.join(f'{c} = ?' for c in sets)} WHERE uuid = ?",
+        (*sets.values(), uuid),
+    )
+    conn.commit()
+
+
 # Which stored scoring profile ("warehouse" — default, or "it") a given
 # request should read/sort/filter by. Maps to the actual column name here,
 # validated before use — a column name can't go through a `?` placeholder,

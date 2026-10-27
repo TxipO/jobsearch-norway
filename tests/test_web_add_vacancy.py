@@ -288,3 +288,102 @@ def test_linkedin_url_check_accepts_normal_urls():
         "https://www.linkedin.com:443/jobs/view/1/",
     ):
         assert web_app._is_linkedin_https_url(url), url
+
+
+# --- Edit form (✎ Редагувати on the detail page) ---
+
+ENGLISH_TEXT = (
+    "We are looking for a motivated warehouse employee to join our team in Bergen. "
+    "The position includes picking, packing and shipping of goods every day."
+)
+
+
+def _req(method, path):
+    return Request({"type": "http", "method": method, "path": path, "headers": [], "query_string": b""})
+
+
+def _seed(conn):
+    """A finn-like row: no description, one stale borrow marker."""
+    web_app.add_vacancy_submit(
+        link="", title="Lagerarbeider", business_name="Acme AS", municipal="Bergen", county="Vestland",
+        description="", application_due="", user_status="interesting",
+    )
+    uuid = conn.execute("SELECT uuid FROM vacancies").fetchone()["uuid"]
+    conn.execute("UPDATE vacancies SET description_borrowed_from = 'nav-1' WHERE uuid = ?", (uuid,))
+    conn.commit()
+    return uuid
+
+
+def _edit(uuid, **overrides):
+    kwargs = dict(link="", title="Lagerarbeider", business_name="Acme AS", municipal="Bergen",
+                  county="Vestland", description="", application_due="")
+    kwargs.update(overrides)
+    return web_app.edit_vacancy_submit(_req("POST", f"/vacancy/{uuid}/edit"), uuid, **kwargs)
+
+
+def test_edit_form_is_prefilled_without_status_or_linkedin_button(tmp_path, monkeypatch):
+    conn = _setup(tmp_path, monkeypatch)
+    uuid = _seed(conn)
+    html = web_app.edit_vacancy_form(_req("GET", f"/vacancy/{uuid}/edit"), uuid).body.decode()
+    assert 'value="Lagerarbeider"' in html and 'value="Acme AS"' in html and 'value="Vestland"' in html
+    assert f'action="/vacancy/{uuid}/edit"' in html
+    assert "f-status" not in html
+    assert "linkedin-preview" not in html
+
+
+def test_edit_form_404_for_unknown_uuid(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    with pytest.raises(Exception) as exc:
+        web_app.edit_vacancy_form(_req("GET", "/vacancy/nope/edit"), "nope")
+    assert getattr(exc.value, "status_code", None) == 404
+
+
+def test_add_form_still_has_status_select_and_linkedin_button(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    html = web_app.add_vacancy_form(_req("GET", "/vacancy/add")).body.decode()
+    assert "f-status" in html
+    assert "linkedin-preview" in html
+
+
+def test_edit_submit_updates_same_row_and_owns_description(tmp_path, monkeypatch):
+    conn = _setup(tmp_path, monkeypatch)
+    uuid = _seed(conn)
+    resp = _edit(uuid, description=ENGLISH_TEXT.replace(". ", ".\r\n"), link="https://www.finn.no/job/1",
+                 application_due="30.09.2026")
+    assert resp.status_code == 303 and resp.headers["location"] == f"/vacancy/{uuid}"
+    assert conn.execute("SELECT COUNT(*) FROM vacancies").fetchone()[0] == 1
+    row = db.get_vacancy(conn, uuid)
+    assert row["description"].startswith("We are looking") and "\r" not in row["description"]
+    assert row["language"] == "en"
+    assert row["description_borrowed_from"] is None
+    assert row["application_url"] == row["link"] == "https://www.finn.no/job/1"
+    assert row["application_due_sort"] == db.normalize_due_date("30.09.2026")
+    assert row["employer_name"] == "Acme AS"
+    # Untouched by an edit.
+    assert row["source"] == "manual" and row["user_status"] == "interesting"
+    assert row["score"] is not None
+
+
+def test_edit_submit_unchanged_description_keeps_borrow_and_empty_fields_become_null(tmp_path, monkeypatch):
+    conn = _setup(tmp_path, monkeypatch)
+    uuid = _seed(conn)
+    _edit(uuid, county="", municipal="  ", application_due="")
+    row = db.get_vacancy(conn, uuid)
+    assert row["county"] is None and row["municipal"] is None and row["application_due"] is None
+    assert row["description_borrowed_from"] == "nav-1"  # description not edited -> borrow stays
+    # Clearing a previously-set description stores NULL and lets borrowing resume.
+    _edit(uuid, description=ENGLISH_TEXT)
+    _edit(uuid, description="")
+    row = db.get_vacancy(conn, uuid)
+    assert row["description"] is None and row["description_borrowed_from"] is None
+    assert row["language"] is None
+
+
+def test_edit_submit_blank_title_is_rejected_without_writing(tmp_path, monkeypatch):
+    conn = _setup(tmp_path, monkeypatch)
+    uuid = _seed(conn)
+    resp = _edit(uuid, title="   ", county="Changed")
+    assert resp.status_code == 200
+    assert "backup-warning" in resp.body.decode()  # apostrophe is HTML-escaped, so match the error box
+    row = db.get_vacancy(conn, uuid)
+    assert row["title"] == "Lagerarbeider" and row["county"] == "Vestland"

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Редагувати вакансію — Jobsearch Norway{% endblock %}
+{% block content %}
+
+<a href="/vacancy/{{ uuid }}" class="back-link">&larr; До вакансії</a>
+
+<h1>Редагувати вакансію</h1>
+
+<form method="post" action="/vacancy/{{ uuid }}/edit" class="add-vacancy-form">
+  {% include "_add_vacancy_fields.html" %}
+  <button type="submit" class="apply-btn">Зберегти зміни</button>
+  <a href="/vacancy/{{ uuid }}">Скасувати</a>
+</form>
+
+{% endblock %}

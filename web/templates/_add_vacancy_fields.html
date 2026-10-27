@@ -3,12 +3,14 @@
     <label for="f-link">Посилання (LinkedIn — можна автозаповнити; будь-яке інше — просто збережеться)</label>
     <div class="linkedin-fetch-row">
       <input type="url" id="f-link" name="link" value="{{ values.link if values else '' }}" placeholder="https://www.linkedin.com/jobs/view/...">
+      {% if not edit %}
       <button type="button" class="apply-btn"
         hx-post="/vacancy/add/linkedin-preview"
         hx-include="#f-link"
         hx-target="#add-vacancy-fields"
         hx-swap="outerHTML"
       >Автозаповнити з LinkedIn</button>
+      {% endif %}
     </div>
   </div>
 
@@ -46,6 +48,7 @@
     <input type="text" id="f-due" name="application_due" value="{{ values.application_due if values else '' }}" placeholder="напр. 30.09.2026">
   </div>
 
+  {% if not edit %}
   <div class="form-row">
     <label for="f-status">Статус</label>
     <select id="f-status" name="user_status">
@@ -54,4 +57,5 @@
       {% endfor %}
     </select>
   </div>
+  {% endif %}
 </div>

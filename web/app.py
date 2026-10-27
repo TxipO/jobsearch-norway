@@ -864,6 +864,54 @@ def vacancy_detail(request: Request, uuid: str):
     )
 
 
+def _render_edit_form(request: Request, conn, uuid: str, values: dict, error: str | None = None):
+    return templates.TemplateResponse(
+        request, "edit_vacancy.html",
+        {"score_profile": get_score_profile(conn), "uuid": uuid, "values": values, "error": error, "edit": True},
+    )
+
+
+@app.get("/vacancy/{uuid}/edit", response_class=HTMLResponse)
+def edit_vacancy_form(request: Request, uuid: str):
+    conn = get_conn()
+    v = get_vacancy_or_404(conn, uuid)
+    values = {k: v[k] for k in ("link", "title", "business_name", "municipal", "county", "description", "application_due")}
+    return _render_edit_form(request, conn, uuid, values)
+
+
+@app.post("/vacancy/{uuid}/edit")
+def edit_vacancy_submit(
+    request: Request, uuid: str,
+    link: str = Form(""), title: str = Form(""), business_name: str = Form(""),
+    municipal: str = Form(""), county: str = Form(""), description: str = Form(""),
+    application_due: str = Form(""),
+):
+    conn = get_conn()
+    get_vacancy_or_404(conn, uuid)
+    title = title.strip()
+    if not title:
+        values = {"link": link, "title": title, "business_name": business_name, "municipal": municipal,
+                  "county": county, "description": description, "application_due": application_due}
+        return _render_edit_form(request, conn, uuid, values, "Назва вакансії обов'язкова.")
+    link = link.strip()
+    due = application_due.strip() or None
+    db.update_vacancy_fields(conn, uuid, {
+        "title": title,
+        "business_name": business_name.strip() or None,
+        "employer_name": business_name.strip() or None,
+        "municipal": municipal.strip() or None,
+        "county": county.strip() or None,
+        # Browsers submit textarea newlines as CRLF; stored text uses LF.
+        "description": description.replace("\r\n", "\n").strip() or None,
+        "link": link or None,
+        "application_url": link or None,
+        "application_due": due,
+        "application_due_sort": db.normalize_due_date(due),
+    })
+    scoring.rescore_one(conn, uuid)
+    return RedirectResponse(url=f"/vacancy/{uuid}", status_code=303)
+
+
 @app.get("/vacancy/{uuid}/document/{filename}")
 def download_document(uuid: str, filename: str):
     # A NUL in uuid makes Path.resolve()/exists() raise ValueError -> 500.
