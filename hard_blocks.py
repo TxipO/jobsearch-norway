@@ -405,12 +405,18 @@ _HEALTH_CONTEXT_RE = re.compile(
 # Statens havarikommisjon, Skatteetaten — and zero false positives; the
 # "enkelte stillinger" guard below still applies to these two alternatives
 # same as every other one.
+#
+# Fifth round, 2026-10-27: Kongsberg Defence's "må du kunne sikkerhetsklareres
+# og autoriseres jfr. Sikkerhetsloven" slipped through — a subject between
+# "må" and "kunne" (up to 3 words: du / vedkommende / den som ansettes), and
+# "jfr."/"jf."/"i henhold til"/"iht." instead of "etter" before the law name.
 SECURITY_CLEARANCE_RE = re.compile(
-    r"(må kunne sikkerhetsklareres|krav(?:er)? (?:om|til) sikkerhetsklarering|"
+    r"(må (?:\w+ ){0,3}kunne sikkerhetsklareres|krav(?:er)? (?:om|til) sikkerhetsklarering|"
     r"vilkår for sikkerhetsklarering|kreve(?:r)? sikkerhetsklarering|"
     r"autoriseres for (?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
     r"klareres for (?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
-    r"autorisasjon etter sikkerhetsloven|autoriseres etter sikkerhetsloven|"
+    r"autorisasjon etter sikkerhetsloven|"
+    r"autoriseres (?:etter|jfr?\.?|i henhold til|iht\.?) sikkerhetsloven|"
     r"sikkerhetsklarering (?:på|til|for) (?:nivå )?"
     r"(?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
     r"(?:inneha|kvalifisere (?:til|for)) sikkerhetsklarering)"

@@ -730,6 +730,33 @@ def test_security_clearance_real_requirements_still_blocked_after_negation_guard
         assert check_exclusion("Systemutvikler", body)[0], body
 
 
+def test_security_clearance_pronoun_and_jfr_phrasings_blocked():
+    """Kongsberg Defence 2026-10-27: a subject between "må" and "kunne", and
+    "jfr."/"jf." instead of "etter" before "sikkerhetsloven"."""
+    bodies = [
+        "For å være aktuell kandidat til stillingen må du kunne sikkerhetsklareres "
+        "og autoriseres jfr. Sikkerhetsloven.",
+        "Vedkommende må kunne sikkerhetsklareres.",
+        "Du må kunne autoriseres jf. sikkerhetsloven.",
+        "Du må kunne autoriseres i henhold til sikkerhetsloven.",
+    ]
+    for body in bodies:
+        excluded, reason = check_exclusion("Systemutvikler", body)
+        assert excluded, body
+        assert "sikkerhetsklarering" in reason, body
+
+
+def test_security_clearance_pronoun_phrasing_hedged_not_blocked():
+    bodies = [
+        "Enkelte stillinger vil måtte kunne sikkerhetsklareres.",
+        "Du trenger ikke å kunne sikkerhetsklareres.",
+        "Det er en fordel at du kan autoriseres jfr. sikkerhetsloven.",
+        "Stillingen krever ikke at du må kunne sikkerhetsklareres.",
+    ]
+    for body in bodies:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
 def test_authorisation_negated_or_soft_not_blocked():
     for body in [
         "Det er en fordel med autorisasjon som helsefagarbeider",
