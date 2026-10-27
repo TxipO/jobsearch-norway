@@ -58,10 +58,15 @@ _REGION_WORDS_RE = re.compile(r"^Greater\s+|\s+(?:Metropolitan\s+)?(?:Region|Are
 # mail 40 days old is almost certainly a closed job, yet a row's first_seen_at
 # starts the moment we insert it. With the 60-day window, the first sync after
 # the 2026-10-08 parser fix would have inserted 107 jobs last seen 31-60 days
-# ago as "new". 21 days still covers a three-week gap between syncs.
+# ago as "new". Was 21 days; cut to 14 on 2026-10-27 (see below).
 # The same window defines "closed": sync() deletes untouched rows absent from
-# every digest in it (db.retire_linkedin_absent_from_digests).
-LINKEDIN_LOOKBACK_DAYS = 21
+# every digest in it (db.retire_linkedin_absent_from_digests). Measured
+# 2026-10-27 over 73 digest mails of the last 21 days: 152 of 160 jobs appear
+# in exactly ONE mail, so "days since the mail" is the job's age; a job mailed
+# 19 days earlier (>100 applicants) was already closed, and every closed job
+# found so far was >=19 days past its mail. 14 days still covers a two-week
+# gap between syncs.
+LINKEDIN_LOOKBACK_DAYS = 14
 
 
 def fetch_digest_texts() -> list[str]:
