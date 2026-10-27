@@ -13,8 +13,9 @@ the same message. Per the user's own choice, vacancy identification is
 always given explicitly this way; don't try to guess it from a filename or
 "the currently open vacancy" convention. Two ways this trigger shows up:
 - Directly: the user attaches a CV and names a vacancy in a message to you.
-- Via the resume-prompt flow: the user pastes the prompt from
-  `/vacancy/<uuid>/resume-prompt` into a fresh Claude Code chat AND attaches
+- Via the søknad-prompt flow: the user pastes the prompt built by
+  `resume_prompt.build_resume_prompt(..., uuid=uuid)` (the web page for it
+  was removed 2026-10-27, user decision) into a fresh Claude Code chat AND attaches
   a CV in that same message — the prompt's own `CLAUDE_CODE_NOTE` section
   (see `resume_prompt.py`) tells you to run this skill first, before
   writing the søknad JSON, so the søknad is grounded in that specific CV.
@@ -74,8 +75,8 @@ If the user wants the fancier hand-designed look back, that's a deliberate one-o
    had to transcribe manually.
 
 5. If the user also wants a søknad generated for this same vacancy now,
-   continue with the normal flow: `/vacancy/<uuid>/resume-prompt` in the web
-   UI (or `resume_prompt.build_resume_prompt(..., uuid=uuid)`), which
+   continue with the normal flow: `resume_prompt.build_resume_prompt(..., uuid=uuid)`
+   (the web UI page for it was removed 2026-10-27, user decision), which
    automatically prefers `profile/generated/<uuid>/cv.txt` over `profile.md`
    when it has real content (≥200 chars — near-empty extraction falls back
    to profile.md) — see `resume_prompt.py`'s docstring.

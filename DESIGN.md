@@ -80,7 +80,7 @@ components:
 
 This is not an invented visual world. `PRODUCT.md`'s Brand Commitments record that the user was offered a full visual-world replacement twice (a bokføring-ledger direction, then a postal-sorting-station direction, plus catalog challengers each round) and chose the canon both times. The standing craft bar is **Todoist** (compact, clear list ergonomics) and **Vercel Dashboard** (precise, restrained, tabular-numeral data density). The system's identity is that it refuses a metaphor: it is a personal Operate dashboard for triaging real job vacancies, built to be scanned fast and trusted completely, not admired.
 
-The redesign covers every surface: topbar, sync bar, filters, vacancy list, kanban board, vacancy detail, and the resume-prompt page all run on the same root tokens and the same component-level rules — there is no legacy tier left pending reconciliation. The one item that remains genuinely open is `.filters-panel`'s drop shadow (see Elevation & Depth) — not unfinished work, but a deliberate one-off that the system documents explicitly rather than silently allowing to drift.
+The redesign covers every surface: topbar, sync bar, filters, vacancy list, kanban board, and vacancy detail all run on the same root tokens and the same component-level rules — there is no legacy tier left pending reconciliation. The one item that remains genuinely open is `.filters-panel`'s drop shadow (see Elevation & Depth) — not unfinished work, but a deliberate one-off that the system documents explicitly rather than silently allowing to drift.
 
 A subsequent `/impeccable audit` pass (2026-08-04) closed a round of accessibility gaps: a failing-contrast text token was retired outright, two heading-less pages gained real `<h1>` elements, notes got a screen-reader-only text companion to their icon+tooltip, mobile touch targets were floored at 44px, the topnav grew a real active state, and both bare-icon form fields (`textarea`, `#prompt-box`) got `aria-label`. None of this is decoration — it's the same "trusted completely" bar applied to assistive tech and touch input, not just sighted mouse users.
 
@@ -161,7 +161,7 @@ A sharp small-radius scale, deliberately capped: `--radius-sm` (6px, status pill
 
 ### Buttons
 - **Shape:** 8px radius (`--radius-md`).
-- **Primary:** solid accent-blue background, white text, `0.5rem 1rem` padding (`sync-btn`, `filters-submit`, `apply-btn`, resume-prompt's copy button); `opacity: 0.88` on hover, `0.55` + `not-allowed` cursor when disabled. The disabled sync button additionally pulses opacity — see Elevation & Depth → Motion.
+- **Primary:** solid accent-blue background, white text, `0.5rem 1rem` padding (`sync-btn`, `filters-submit`, `apply-btn`); `opacity: 0.88` on hover, `0.55` + `not-allowed` cursor when disabled. The disabled sync button additionally pulses opacity — see Elevation & Depth → Motion.
 - **Ghost/Reset:** transparent background, `border-hi` outline, muted text; hovers to `--c-hover` background + `text-sec` (`filters-reset`).
 - **Focus:** every button gets the shared focus-visible ring (see Do's and Don'ts) — this project had no visible focus treatment before the redesign.
 - **Transitions:** hover/active state changes are named per-property (`background-color`, `color`, `border-color` as applicable to the selector), not a blanket `transition: all` — a performance-hygiene cleanup from the 2026-08-04 audit on `.status-btn`, `.flag-btn`, `.lang-toggle a`, and the same discipline extended to every hover transition added in the subsequent motion pass. No visual change; new interactive elements should name their transitioned properties rather than reach for `all`.
@@ -187,7 +187,7 @@ A sharp small-radius scale, deliberately capped: `--radius-sm` (6px, status pill
 ### Navigation
 - **Topbar:** `--c-elevated` background, bottom `--c-border` hairline, brand wordmark (700 weight, -0.01em tracking) left, nav links right. Nav links are muted-text, 2px transparent bottom border at rest, darken to `--c-text` on hover (130ms, see Elevation & Depth → Motion).
 - **Active state:** the current page's nav link gets both `aria-current="page"` (assistive-tech semantics, driven server-side off `request.url.path` in `base.html`) and `class="active"` (`color: var(--c-text)`, bottom border switches to `--c-accent`). Added in the 2026-08-04 audit — before this the topnav had no way, visual or semantic, to tell you which page you were on.
-- **Back link:** muted text, no underline at rest, darkens to `--c-text-sec` on hover (`.back-link`, used on both detail and resume-prompt pages).
+- **Back link:** muted text, no underline at rest, darkens to `--c-text-sec` on hover (`.back-link`).
 
 ### Icons
 - **Style:** authored inline SVG, stroke-based (1.5px stroke-width, ~13-16px box, round line-cap/join), `currentColor` stroke, no fill. Used for the flag, notes, document, and backup-warning indicators. Emoji were deliberately replaced by this icon system across every template in the app — see Do's and Don'ts. There are zero emoji characters anywhere in `web/templates/*.html`; this is a completed guarantee, not a per-instance fix, and any new indicator must be authored in this same SVG language rather than reaching for an emoji glyph.

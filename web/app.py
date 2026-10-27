@@ -28,7 +28,6 @@ import linkedin_client
 import nav_client
 import reachability
 import scoring
-from resume_prompt import build_resume_prompt
 from web.render import sanitize_description
 
 logger = logging.getLogger(__name__)
@@ -924,21 +923,6 @@ def download_document(uuid: str, filename: str):
     if not path.is_relative_to(GENERATED_DIR) or not path.exists():
         return HTMLResponse("Not found", status_code=404)
     return FileResponse(path, filename=filename)
-
-
-@app.get("/vacancy/{uuid}/resume-prompt", response_class=HTMLResponse)
-def vacancy_resume_prompt(request: Request, uuid: str, lang: str = "en"):
-    lang = "no" if lang == "no" else "en"
-    conn = get_conn()
-    vacancy = get_vacancy_or_404(conn, uuid)
-    prompt = build_resume_prompt(
-        vacancy["title"], vacancy["description"], vacancy["employer_name"],
-        vacancy["municipal"], vacancy["county"], uuid, lang=lang,
-    )
-    return templates.TemplateResponse(
-        request, "resume_prompt.html",
-        {"v": vacancy, "prompt": prompt, "lang": lang, "score_profile": get_score_profile(conn)},
-    )
 
 
 @app.post("/vacancy/{uuid}/status", response_class=HTMLResponse)

@@ -830,31 +830,6 @@ main:has(.kanban-board) {
   font-size: 0.72rem;
 }
 
-/* ── Resume-prompt language toggle: same ghost-pill pattern as status-btn ── */
-
-.lang-toggle {
-  display: flex;
-  gap: 0.25rem;
-  margin: 0.75rem 0;
-}
-.lang-toggle a {
-  padding: 0.3rem 0.7rem;
-  border: 1px solid var(--c-border-mid);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--c-text-muted);
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-decoration: none;
-  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
-}
-.lang-toggle a:hover { background: var(--c-hover); color: var(--c-text-sec); }
-.lang-toggle a.active {
-  background: color-mix(in srgb, var(--c-accent) 15%, transparent);
-  color: var(--c-accent-text);
-  border-color: transparent;
-}
-
 /* margin-left:auto must go on the flex item itself (the span
    _flag_control.html wraps its button in, for HTMX's swap target) — auto
    margin on the nested button has no effect on the parent flex layout. */
@@ -941,7 +916,6 @@ main:has(.kanban-board) {
 
 .actions { margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap; }
 
-.resume-btn { background: var(--c-success); }
 .doc-btn {
   display: inline-flex;
   align-items: center;
@@ -949,12 +923,6 @@ main:has(.kanban-board) {
   background: var(--c-raised);
   color: var(--c-text-sec);
   border: 1px solid var(--c-border-hi);
-}
-
-.prompt-hint {
-  color: var(--c-text-muted);
-  font-size: 0.88rem;
-  max-width: 60ch;
 }
 
 .add-vacancy-form { max-width: 560px; }
@@ -984,20 +952,6 @@ main:has(.kanban-board) {
 .linkedin-fetch-row { display: flex; gap: 0.5rem; }
 .linkedin-fetch-row input { flex: 1; }
 .linkedin-fetch-row button { flex-shrink: 0; }
-
-#prompt-box {
-  width: 100%;
-  margin-top: 1rem;
-  padding: 1rem;
-  border: 1px solid var(--c-border-hi);
-  border-radius: var(--radius-lg);
-  background: var(--c-raised);
-  color: var(--c-text);
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  line-height: 1.4;
-  resize: vertical;
-}
 
 .results-count {
   color: var(--c-text-muted);

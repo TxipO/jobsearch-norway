@@ -89,7 +89,6 @@
     {% elif v.link %}
     <a class="apply-btn" href="{{ v.link | safe_url }}" target="_blank" rel="noopener noreferrer">Відкрити на arbeidsplassen.no &rarr;</a>
     {% endif %}
-    <a class="apply-btn resume-btn" href="/vacancy/{{ v.uuid }}/resume-prompt">Згенерувати søknad &rarr;</a>
     <a class="apply-btn" href="/vacancy/{{ v.uuid }}/edit">&#9998; Редагувати</a>
     {% for doc in generated_docs %}
     <a class="apply-btn doc-btn" href="/vacancy/{{ v.uuid }}/document/{{ doc }}">
