@@ -1410,7 +1410,9 @@ def rescore_one(conn, uuid: str) -> dict | None:
     if salary != row["salary_text"] or salary_min != row["salary_min"]:
         db.set_salary_text(conn, uuid, salary, salary_min)
 
-    is_excluded, reason = check_exclusion(row["title"], plain_description, row["county"], extent_pct)
+    is_excluded, reason = check_exclusion(
+        row["title"], plain_description, row["county"], extent_pct, municipal=row["municipal"],
+    )
     db.set_exclusion(conn, uuid, is_excluded, reason)
 
     (score, breakdown), (score_it, breakdown_it) = score_both_profiles(
@@ -1513,7 +1515,9 @@ def rescore_all(conn) -> dict:
         if salary != row["salary_text"] or salary_min != row["salary_min"]:
             salary_updates.append((salary, salary_min, row["uuid"]))
 
-        is_excluded, reason = check_exclusion(row["title"], plain_description, row["county"], extent_pct)
+        is_excluded, reason = check_exclusion(
+            row["title"], plain_description, row["county"], extent_pct, municipal=row["municipal"],
+        )
         if is_excluded:
             excluded_count += 1
 

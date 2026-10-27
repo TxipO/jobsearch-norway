@@ -1036,3 +1036,25 @@ def test_security_clearance_english_disclaimers_not_blocked():
     for body in bodies:
         excluded, _ = check_exclusion("Systemutvikler", body)
         assert not excluded, body
+
+
+def test_svalbard_vacancies_blocked_by_location_not_description():
+    """TEMPORARY user decision 2026-10-27: Svalbard is hidden. Location only:
+    NAV county 'SVALBARD', Jobbnorge county 'Svalbard' + municipal
+    'Longyearbyen', and a digest row with no county (municipal only). A
+    mainland ad merely mentioning Svalbard in its text must stay visible."""
+    for kwargs in (
+        {"county": "SVALBARD"},
+        {"county": "Svalbard", "municipal": "Longyearbyen"},
+        {"county": None, "municipal": "Longyearbyen"},
+        {"municipal": "Ny-Ålesund"},
+    ):
+        excluded, reason = check_exclusion("IKT-konsulent", "Vi søker en konsulent.", **kwargs)
+        assert excluded, kwargs
+        assert "Шпіцберген" in reason, kwargs
+
+    excluded, _ = check_exclusion(
+        "IKT-konsulent", "Vi har kunder på Svalbard og i resten av landet.",
+        county="VESTLAND", municipal="Bergen",
+    )
+    assert not excluded

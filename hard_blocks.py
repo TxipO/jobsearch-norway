@@ -905,6 +905,20 @@ def _has_unmet_forklift_certificate_requirement(title_l: str, body_l: str) -> bo
 # hide what we can't confidently judge).
 LOW_EXTENT_FAR_THRESHOLD = 60
 
+# TEMPORARY (user decision 2026-10-27, "поки що"): every vacancy located on
+# Svalbard is hidden. The user holds a 5-year permit on the mainland;
+# utlendingsloven does not apply on Svalbard, so years there do not count
+# toward permanent residence/citizenship; Svalbard is outside Schengen
+# (document check on the flight, and his travel document has not arrived
+# yet); the introduction programme and free Norwegian course are tied to the
+# mainland municipality. Revisit once he has his reisebevis and permanent
+# residence is no longer the priority. Signal = structured location only:
+# county (NAV 'SVALBARD', Jobbnorge 'Svalbard') or, for sources that give no
+# county (finn/LinkedIn digests), the municipal. Never the description:
+# mainland ads mention "kunder på Svalbard" (27 live rows) and must stay.
+SVALBARD_LOCALITIES = frozenset({"svalbard", "longyearbyen", "ny-ålesund", "barentsburg", "svea"})
+SVALBARD_REASON = "Шпіцберген: роки там не йдуть у ПМЖ, поза Шенгеном, без інтропрограми (тимчасово)"
+
 def _has_body_authorisation_requirement(body_l: str) -> bool:
     """Body-level authorisation requirement. Every hit is judged in its own
     clause (negation / softener / "enkelte-noen-visse stillinger"
@@ -936,9 +950,13 @@ def check_exclusion(
     description_text: str | None,
     county: str | None = None,
     extent_percent: int | None = None,
+    municipal: str | None = None,
 ) -> tuple[bool, str | None]:
     """Returns (is_excluded, human-readable reason in Ukrainian)."""
     title_l = normalize_text(title).lower()
+
+    if any(normalize_text(v).lower() in SVALBARD_LOCALITIES for v in (county, municipal) if v):
+        return True, SVALBARD_REASON
 
     for _key, patterns, reason in BLOCK_CATEGORIES:
         for pattern in patterns:
