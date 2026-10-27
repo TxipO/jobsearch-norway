@@ -530,10 +530,11 @@ def kanban(request: Request):
     score_profile = get_score_profile(conn)
     # "new" is the entire unreacted backlog (~1000s of rows) — that's the
     # main list's job. Kanban is for tracking applications you've actually
-    # acted on, so it starts at "interesting". "ignored"/"archived" are
-    # terminal dead-end states (user-requested 2026-08-02: they clutter the
-    # active-pipeline board) — still reachable via the main list's status
-    # filter, just not a kanban column. active_only=False: a vacancy you've
+    # acted on, so it starts at "interesting". "archived" is a terminal
+    # dead-end state kept off the board (user-requested 2026-08-02), still
+    # reachable via the main list's status filter. "ignored" came back on
+    # 2026-10-27: it means the employer went silent, so it's still part of
+    # the application history. active_only=False: a vacancy you've
     # applied to still matters after the posting itself closes.
     # show_flagged=True: flagging (🚩) and application status are
     # independent axes — a vacancy you're already tracking here must not
@@ -542,7 +543,7 @@ def kanban(request: Request):
     # for the same case, kanban has none, so hiding here would be silent).
     columns = {
         s: db.list_vacancies(conn, active_only=False, user_status=s, limit=500, show_flagged=True, score_profile=score_profile)
-        for s in db.USER_STATUSES if s not in ("new", "ignored", "archived")
+        for s in db.USER_STATUSES if s not in ("new", "archived")
     }
     return templates.TemplateResponse(request, "kanban.html", {"columns": columns, "score_profile": score_profile})
 
