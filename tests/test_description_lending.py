@@ -204,6 +204,28 @@ def test_detail_page_shows_borrowed_notice_when_lender_is_gone(tmp_path, monkeyp
     assert "яке вже закрите" in html
 
 
+def test_detail_page_shows_exclusion_reason_only_when_excluded(tmp_path, monkeypatch):
+    """Regression (2026-10-28): a hard-blocked row looked unchanged on its
+    detail page, so the block seemed not to have fired."""
+    from starlette.requests import Request
+    from web import app as web_app
+    conn = _make_conn(tmp_path)
+    real_connect = db.connect
+    monkeypatch.setattr(web_app.db, "connect", lambda *a, **kw: real_connect(tmp_path / "test.db"))
+    _insert(conn, "nav-1", "nav", "Selger", "Acme AS", "Bergen")
+    _insert(conn, "nav-2", "nav", "Lager", "Acme AS", "Bergen")
+    conn.execute("UPDATE vacancies SET excluded=1, exclusion_reason=? WHERE uuid='nav-1'", ("Допуск <b>x</b>",))
+    conn.commit()
+
+    def page(uuid):
+        req = Request({"type": "http", "method": "GET", "path": f"/vacancy/{uuid}", "headers": [], "query_string": b""})
+        return web_app.vacancy_detail(req, uuid).body.decode()
+
+    html = page("nav-1")
+    assert "Недосяжно: Допуск &lt;b&gt;x&lt;/b&gt;" in html and "у списку прихована" in html
+    assert "Недосяжно" not in page("nav-2")
+
+
 ENGLISH_NAV_DESCRIPTION = (
     "We are looking for a motivated warehouse employee to join our team in Bergen. "
     "The position includes picking, packing and shipping of goods, as well as "

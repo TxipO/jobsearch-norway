@@ -658,6 +658,11 @@ main:has(.kanban-board) {
   font-weight: 600;
 }
 
+.exclusion-hint {
+  color: var(--c-text-muted);
+  font-weight: 400;
+}
+
 .new-tag, .deadline-urgent-tag {
   display: inline-block;
   flex-shrink: 0;

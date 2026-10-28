@@ -13,6 +13,7 @@
     <h1>{{ v.title }}</h1>
     {% include "_flag_control.html" %}
   </div>
+  {% if v.excluded %}<div class="exclusion-tag">Недосяжно: {{ v.exclusion_reason }} <span class="exclusion-hint">у списку прихована</span></div>{% endif %}
   <div class="vacancy-meta">
     <span>{{ v.employer_name }}</span>
     <span class="sep">&middot;</span>
