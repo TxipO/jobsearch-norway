@@ -1118,7 +1118,12 @@ def _score_profiles(
     # municipal doesn't matter when the work itself isn't tied to it).
     needs_relocation = municipal_u not in TIER_1_MUNICIPALS and not is_remote
     low_extent = needs_relocation and extent_percent is not None and extent_percent < RELOCATION_MIN_EXTENT_PERCENT
-    is_vikariat = (engagement_type or "").lower().startswith("vikariat")
+    # Prosjekt is a time-limited contract like Vikariat (2026-10-30 flag: a
+    # 5-month "Prosjekt" IT Support in Oslo sat at 78 in the IT top) - same
+    # duration gate. Engasjement is deliberately NOT included: the control set
+    # holds a 100% Bergen warehouse Engasjement the user marked "interesting",
+    # so he does take those (14 visible out-of-region ones score 40+).
+    is_vikariat = (engagement_type or "").lower().startswith(("vikariat", "prosjekt"))
     short_vikariat = needs_relocation and is_vikariat and not VIKARIAT_LONG_DURATION_RE.search(text)
     relocation_penalty = (RELOCATION_PENALTY if low_extent else 0) + (RELOCATION_PENALTY if short_vikariat else 0)
 

@@ -503,6 +503,30 @@ def test_relocation_penalty_unstated_vikariat_duration_defaults_risky():
     assert bd["relocation_worthiness_penalty"]["points"] < 0
 
 
+def test_relocation_penalty_prosjekt_counts_as_temporary_but_engasjement_does_not():
+    """2026-10-30 flag: a 5-month "Prosjekt" IT Support in Oslo was not penalised
+    (only Vikariat was). Same duration gate: unstated = short, stated >= 12 months
+    (or a Tier-1 / remote role) = waived. Engasjement stays unpenalised: the user
+    marked a 100% Bergen warehouse Engasjement "interesting" (score_regression)."""
+    _, bd = _score("Lagermedarbeider", "Vi søker deg.", municipal="Bergen", county="Vestland",
+                    extent_percent=100, engagement_type="Engasjement")
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
+    for kind in ("Prosjekt",):
+        _, bd = _score("IT Support Specialist", "Assignment period 2 November - 31 March.",
+                        municipal="Oslo", county="Oslo", extent_percent=100, engagement_type=kind)
+        assert bd["relocation_worthiness_penalty"]["matched"]["short_vikariat"] is True, kind
+        _, bd = _score("Konsulent", "Prosjektet har ett års varighet, stillingen er på 12 måneder.",
+                        municipal="Oslo", county="Oslo", extent_percent=100, engagement_type=kind)
+        assert bd["relocation_worthiness_penalty"]["points"] == 0, kind
+        _, bd = _score("IT Support Specialist", "Assignment period 2 November - 31 March.",
+                        municipal="Sogndal", county="Vestland", extent_percent=100, engagement_type=kind)
+        assert bd["relocation_worthiness_penalty"]["points"] == 0, kind  # Tier-1: no move needed
+    # Mirror: a permanent post is untouched.
+    _, bd = _score("IT Support Specialist", "Fast stilling.", municipal="Oslo", county="Oslo",
+                    extent_percent=100, engagement_type="Fast")
+    assert bd["relocation_worthiness_penalty"]["points"] == 0
+
+
 def test_relocation_penalty_non_vikariat_engagement_not_penalized_by_duration():
     _, bd = _score("Lagermedarbeider", "Vi søker deg.", municipal="Oslo", county="Oslo",
                     extent_percent=100, engagement_type="Fast")
