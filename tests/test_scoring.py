@@ -1170,3 +1170,35 @@ def test_it_profile_penalises_only_five_plus_years_warehouse_keeps_any_mention()
     ):
         assert years(desc, "it") == (-10, True), desc
         assert years(desc, "warehouse") == (-10, True), desc
+
+
+def test_years_requirement_written_with_a_number_word_or_a_compound_erfaring():
+    """2026-11-03 flag: Forbrukertilsynet 'IKT-drift' (score_it 56) required
+    'minimum fem års relevant arbeidserfaring innen nettverk' - a number WORD and
+    words between 'års' and a compound '-erfaring' slipped past every digit form."""
+    def years(desc, profile="it"):
+        _, bd = _score("Servicedesk-medarbeider", desc, profile=profile)
+        return bd["senior_penalty"]["points"]
+
+    for desc in (
+        "Du har minimum fem års relevant arbeidserfaring innen nettverk.",
+        "Du har minst åtte års relevant erfaring fra drift.",
+        "Du har 7-10 års ledererfaring.",
+        "Du har tre til fem års relevant erfaring.",  # range with words: lower bound 3 -> below IT threshold
+    ):
+        expected_it = 0 if "tre til" in desc else -10
+        assert years(desc) == expected_it, desc
+        assert years(desc, "warehouse") == -10, desc
+    # mirrors: below the IT threshold stays free, warehouse still penalises
+    assert years("Du har minimum to års relevant arbeidserfaring.") == 0
+    assert years("Du har minimum 2 års erfaring.") == 0
+    assert years("Du har minimum to års relevant arbeidserfaring.", "warehouse") == -10
+    # an age is not years of experience (cap 15)
+    assert years("Du må være over 18 år, erfaring fra butikk er ønskelig.", "warehouse") == 0
+    assert years("Alle som har fylt 18 år og har erfaring fra lager kan søke.", "warehouse") == 0
+    # an upper bound is a junior programme, not a requirement
+    assert years("Du har inntil tre års relevant arbeidserfaring.", "warehouse") == 0
+    assert years("Du har maks 5 års erfaring.") == 0
+    # negation and employer boilerplate still win
+    assert years("Du trenger ikke fem års relevant arbeidserfaring.") == 0
+    assert years("Vi har over tjue års erfaring i bransjen.", "warehouse") == 0

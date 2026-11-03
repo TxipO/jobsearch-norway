@@ -313,6 +313,21 @@ POLICE_TITLE_PATTERNS = [
 # Plural "lærlinger søkes" stays blocked.
 APPRENTICESHIP_TITLE_PATTERNS = [r"lærling(?!ansvarlig|koordinator|ordning)", r"læreplass"]
 
+# A role advertised FOR speakers of a language the user does not speak
+# (he has Russian, Ukrainian, English, learning Norwegian). Flagged 2026-11-03:
+# "Svensktalende IT-support tekniker" (Sopra Steria) scored 36. Live titles with
+# the shape: "Administrasjonsmedarbeider (polsktalende)", "...German-speaking Key
+# Account Manager", "polsk-og norsktalende BPA-assistent". Never russisk/ukrainsk/
+# engelsk/norsk - those he speaks ("norsk og ukrainsk/russisk talende" stays).
+# The optional "og/eller <word>" bridge catches "svensk og norsktalende" (he
+# cannot do the Swedish half). Title only: 9 body-level hits live, none >= 30.
+_FOREIGN_LANG = r"(?:svensk|dansk|finsk|tysk|fransk|nederlandsk|spansk|italiensk|polsk|islandsk)"
+_FOREIGN_LANG_EN = r"(?:swedish|danish|finnish|german|french|dutch|spanish|italian|polish|icelandic)"
+FOREIGN_LANGUAGE_TITLE_PATTERNS = [
+    _FOREIGN_LANG + r"[- ]?(?:(?:og|eller|/)[- ]?[a-zæøå]+)?[- ]?talende",
+    r"\b" + _FOREIGN_LANG_EN + r"[- ]speaking\b",
+]
+
 BLOCK_CATEGORIES = [
     ("helseautorisasjon", HEALTH_TITLE_PATTERNS, "Потрібна норвезька авторизація медпрацівника"),
     ("pedagogisk utdanning", TEACHING_TITLE_PATTERNS, "Потрібна норвезька педагогічна освіта"),
@@ -323,6 +338,7 @@ BLOCK_CATEGORIES = [
     ("autorisert yrke", LEGAL_FINANCE_TITLE_PATTERNS, "Регульована професія (право/аудит)"),
     ("laerling", APPRENTICESHIP_TITLE_PATTERNS, "Потрібна завершена Vg1/Vg2 videregående (учнівство)"),
     ("politi", POLICE_TITLE_PATTERNS, "Потрібна освіта Politihøgskolen (норвезька поліцейська академія)"),
+    ("fremmedspraak", FOREIGN_LANGUAGE_TITLE_PATTERNS, "Потрібна мова, якою я не володію (шведська/данська/німецька/польська тощо)"),
 ]
 
 # The one body-level check: an explicit statement that authorisation is

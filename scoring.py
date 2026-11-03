@@ -239,7 +239,18 @@ YEARS_EXPERIENCE_PATTERNS = [
     r"\d+\+? år(s)? erfaring",
     r"\d+\+ years('? )?( of)? experience",
     r"flere års erfaring",
+    # 2026-11-03 flag (Forbrukertilsynet "IKT-drift", score_it 56): "minimum fem
+    # års relevant arbeidserfaring innen nettverk" slipped past every form above -
+    # a number WORD, and words between "års" and a compound "-erfaring". Capped at
+    # 15 so an age ("over 18 år, erfaring fra butikk") never reads as years; an
+    # upper bound ("inntil tre års erfaring" = a junior programme) is skipped in
+    # _firm_pattern_matches.
+    r"\b(?:1[0-5]|[1-9]|ett|eitt|en|ein|to|tre|fire|fem|seks|sju|syv|åtte|ni|ti)\s*års?\s+"
+    r"(?:[a-zæøå/-]+\s+){0,3}?[a-zæøå-]*erfaring",
 ]
+_YEARS_WORDS = {"en": 1, "ein": 1, "ett": 1, "eitt": 1, "to": 2, "tre": 3, "fire": 4, "fem": 5, "seks": 6,
+                "sju": 7, "syv": 7, "åtte": 8, "ni": 9, "ti": 10}
+_YEARS_NUMBER_RE = re.compile(r"\d+|\b(?:" + "|".join(_YEARS_WORDS) + r")\b")
 
 # The IT profile penalises a years requirement only from this many years up
 # (2026-10-22, user: «Звідки взагалі цей штраф у айті? Втф?» - he has ~4.5 years of
@@ -247,7 +258,11 @@ YEARS_EXPERIENCE_PATTERNS = [
 # ("2-4 års erfaring" = 2); "flere års erfaring" has no number = vague, no penalty.
 # The warehouse profile keeps the any-mention -10.
 IT_MIN_YEARS_PENALISED = 5
-_YEARS_RANGE_BEFORE_RE = re.compile(r"(\d+)\s*(?:-|–|—|til|to)\s*$")
+_YEARS_RANGE_BEFORE_RE = re.compile(r"\b(\d+|" + "|".join(_YEARS_WORDS) + r")\s*(?:-|–|—|til|to)\s*$")
+
+
+def _years_value(token: str) -> int:
+    return _YEARS_WORDS.get(token) or int(token)
 
 
 def _required_years(found: list) -> int | None:
@@ -255,11 +270,11 @@ def _required_years(found: list) -> int | None:
     matches of `_firm_pattern_matches(found=...)`; None when none carries a number."""
     best = None
     for clause, m in found:
-        num = re.search(r"\d+", m.group(0))
+        num = _YEARS_NUMBER_RE.search(m.group(0))
         if not num:
             continue  # "flere års erfaring"
         rng = _YEARS_RANGE_BEFORE_RE.search(clause[:m.start()])
-        n = int(rng.group(1)) if rng else int(num.group(0))
+        n = _years_value(rng.group(1) if rng else num.group(0))
         best = n if best is None else max(best, n)
     return best
 
@@ -407,6 +422,9 @@ _NEGATION_WINDOW = 40
 # Employer self-description, not a requirement on the applicant: "Vi har
 # over 25 års erfaring", "med mer enn 30 års erfaring i bransjen".
 _EMPLOYER_BOILERPLATE_BEFORE_RE = re.compile(r"\bvi (?:har|hadde)\b[^.;]*$|\b(?:over|mer enn)\s*$")
+# An upper bound is the opposite of a requirement: "inntil tre års relevant
+# arbeidserfaring" (Look North Trainee), "maks 2 års erfaring".
+_YEARS_UPPER_BOUND_BEFORE_RE = re.compile(r"\b(?:inntil|opptil|maks(?:imalt|imum)?|under)\s*$")
 
 
 class _Clauses:
@@ -474,6 +492,8 @@ def _firm_pattern_matches(
             for m in rx.finditer(clause):
                 before = clause[:m.start()]
                 if _NEGATION_RE.search(before[-_NEGATION_WINDOW:]):
+                    continue
+                if years_boilerplate and _YEARS_UPPER_BOUND_BEFORE_RE.search(before):
                     continue
                 if (
                     years_boilerplate

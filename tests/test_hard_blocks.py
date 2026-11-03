@@ -1058,3 +1058,33 @@ def test_svalbard_vacancies_blocked_by_location_not_description():
         county="VESTLAND", municipal="Bergen",
     )
     assert not excluded
+
+
+def test_foreign_language_speaker_titles_blocked():
+    """2026-11-03 flag: 'Svensktalende IT-support tekniker' (Sopra Steria) scored 36.
+    The user speaks Russian/Ukrainian/English and is learning Norwegian - a role
+    advertised for speakers of Swedish/Polish/German/... is impossible."""
+    for title in (
+        "Svensktalende IT-support tekniker",
+        "Administrasjonsmedarbeider (polsktalende) – åpen søknad",
+        "Sprichst du Deutsch? We are looking for a German-speaking Key Account Manager",
+        "Norsk- og svensktalende kundeservice",
+        "Ung og aktiv dame søker polsk-og norsktalende BPA-assistent",
+        "French-speaking customer support agent",
+    ):
+        excluded, reason = check_exclusion(title, "")
+        assert excluded, title
+        assert "мова" in reason, title
+
+
+def test_languages_the_user_speaks_are_not_blocked_by_speaker_titles():
+    for title in (
+        "Rullestolbruker søker norsk og ukrainsk/russisk talende assistenter",
+        "Russisktalende kundeservice",
+        "Engelsktalende IT-support",
+        "Norsktalende kundebehandler",
+        "English-speaking support agent",
+        "Svensk kokk søkes til Bergen",  # nationality-ish, no "-talende": out of scope here
+    ):
+        excluded, _ = check_exclusion(title, "")
+        assert not excluded, title
