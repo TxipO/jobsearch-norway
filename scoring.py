@@ -1548,11 +1548,13 @@ def rescore_all(conn) -> dict:
 
         # Second profile, stored separately (score_it/score_it_breakdown) —
         # the "IT-support like before the warehouse retarget" toggle
-        # (2026-08-27). Dedup/hard-block decisions below stay keyed off the
-        # warehouse score only — which physical row is the visible "keeper"
-        # of a cross-source duplicate is a structural fact about the
-        # vacancy, not something that should flip depending on which
-        # profile you're currently viewing.
+        # (2026-08-27). Dedup/hard-block decisions below are profile-
+        # independent — which physical row is the visible "keeper" of a
+        # cross-source duplicate is a structural fact about the vacancy, not
+        # something that should flip depending on which profile you're
+        # currently viewing. The keeper is ranked by the BEST score across
+        # both profiles (twins' descriptions differ, so a copy can be weak
+        # for warehouse yet strong for IT; 2026-11-03 Forbrukertilsynet).
         (score, breakdown), (score_it, breakdown_it) = score_both_profiles(
             row["title"], description, row["municipal"], row["county"], language,
             row["occupation_categories"], extent_percent=extent_pct,
@@ -1566,7 +1568,7 @@ def rescore_all(conn) -> dict:
         ))
 
         all_candidates.append({
-            "uuid": row["uuid"], "score": score, "source": row["source"],
+            "uuid": row["uuid"], "score": score, "score_it": score_it, "source": row["source"],
             "key": _dedup_key(row["business_name"], row["title"], row["municipal"]),
             "excluded": is_excluded, "reason": reason, "user_status": row["user_status"],
         })
@@ -1825,7 +1827,8 @@ def _exclude_cross_source_duplicates(conn, candidates: list[dict]) -> int:
     both NAV's feed and a finn.no saved-search digest). Small enough in
     practice that a full merge-and-relink UI isn't worth building yet —
     reuses the existing excluded/exclusion_reason mechanism instead: keep
-    the highest-scoring row of a group, flag the rest. Auditable and
+    the row with the best score across both profiles (max of score and
+    score_it, so the choice never flips with the UI toggle), flag the rest. Auditable and
     reversible via the same "show excluded" toggle hard_blocks already
     uses, not a silent delete.
 
@@ -1858,7 +1861,7 @@ def _exclude_cross_source_duplicates(conn, candidates: list[dict]) -> int:
         if len(group) < 2:
             continue
         group.sort(key=lambda c: (
-            -c["score"], _SOURCE_TIE_BREAK_PRIORITY.get(c["source"], 99), c["uuid"],
+            -max(c["score"], c["score_it"]), _SOURCE_TIE_BREAK_PRIORITY.get(c["source"], 99), c["uuid"],
         ))
         keeper = group[0]
         for dupe in group[1:]:

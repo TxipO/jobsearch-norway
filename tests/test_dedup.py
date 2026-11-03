@@ -115,8 +115,8 @@ def test_dedup_tie_break_stable_regardless_of_candidate_order(tmp_path):
     _insert(conn, "jobbnorge-1", "jobbnorge", "Driftsleder", "Politiet", "Oslo")
     key = _dedup_key("Politiet", "Driftsleder", "Oslo")
     tied = [
-        {"uuid": "nav-1", "score": 40, "source": "nav", "key": key},
-        {"uuid": "jobbnorge-1", "score": 40, "source": "jobbnorge", "key": key},
+        {"uuid": "nav-1", "score": 40, "score_it": 40, "source": "nav", "key": key},
+        {"uuid": "jobbnorge-1", "score": 40, "score_it": 40, "source": "jobbnorge", "key": key},
     ]
 
     _exclude_cross_source_duplicates(conn, [dict(c) for c in tied])
@@ -318,9 +318,9 @@ def test_hard_blocked_same_source_sibling_still_blocks_dedup(tmp_path):
     for u, src in (("nav-a", "nav"), ("nav-b", "nav"), ("finn-c", "finn")):
         _insert(conn, u, src, "Seniorkonsulent", "UiO", "Oslo")
     cands = [
-        {"uuid": "nav-a", "score": 50, "source": "nav", "key": key, "excluded": False},
-        {"uuid": "nav-b", "score": 40, "source": "nav", "key": key, "excluded": True},
-        {"uuid": "finn-c", "score": 30, "source": "finn", "key": key, "excluded": False},
+        {"uuid": "nav-a", "score": 50, "score_it": 50, "source": "nav", "key": key, "excluded": False},
+        {"uuid": "nav-b", "score": 40, "score_it": 40, "source": "nav", "key": key, "excluded": True},
+        {"uuid": "finn-c", "score": 30, "score_it": 30, "source": "finn", "key": key, "excluded": False},
     ]
     assert _exclude_cross_source_duplicates(conn, cands) == 0
     assert not db.get_vacancy(conn, "finn-c")["excluded"]
@@ -332,9 +332,26 @@ def test_true_nav_finn_twin_pair_still_dedups_with_deterministic_keeper(tmp_path
     _insert(conn, "finn-1", "finn", "Driftsleder", "Politiet", "Oslo")
     key = _dedup_key("Politiet", "Driftsleder", "Oslo")
     tied = [
-        {"uuid": "finn-1", "score": 40, "source": "finn", "key": key, "excluded": False},
-        {"uuid": "nav-1", "score": 40, "source": "nav", "key": key, "excluded": False},
+        {"uuid": "finn-1", "score": 40, "score_it": 40, "source": "finn", "key": key, "excluded": False},
+        {"uuid": "nav-1", "score": 40, "score_it": 40, "source": "nav", "key": key, "excluded": False},
     ]
     assert _exclude_cross_source_duplicates(conn, tied) == 1
     assert not db.get_vacancy(conn, "nav-1")["excluded"]  # source priority breaks the tie
     assert db.get_vacancy(conn, "finn-1")["excluded"]
+
+
+def test_keeper_is_best_score_across_both_profiles(tmp_path):
+    """Live 2026-11-03 (Forbrukertilsynet 'IKT-drift'): the NAV copy won on the
+    warehouse score alone, hiding the Jobbnorge copy whose score_it was far
+    higher. The keeper is ranked by max(score, score_it)."""
+    conn = _make_conn(tmp_path)
+    _insert(conn, "nav-1", "nav", "IKT-drift", "Forbrukertilsynet", "Oslo")
+    _insert(conn, "jobbnorge-1", "jobbnorge", "IKT-drift", "Forbrukertilsynet", "Oslo")
+    key = _dedup_key("Forbrukertilsynet", "IKT-drift", "Oslo")
+    cands = [
+        {"uuid": "nav-1", "score": 30, "score_it": 19, "source": "nav", "key": key, "excluded": False},
+        {"uuid": "jobbnorge-1", "score": 10, "score_it": 46, "source": "jobbnorge", "key": key, "excluded": False},
+    ]
+    assert _exclude_cross_source_duplicates(conn, cands) == 1
+    assert not db.get_vacancy(conn, "jobbnorge-1")["excluded"]
+    assert db.get_vacancy(conn, "nav-1")["excluded"]
