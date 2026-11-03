@@ -10,6 +10,7 @@ import uuid as uuid_module
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -545,7 +546,22 @@ def kanban(request: Request):
         s: db.list_vacancies(conn, active_only=False, user_status=s, limit=500, show_flagged=True, score_profile=score_profile)
         for s in db.USER_STATUSES if s not in ("new", "archived")
     }
-    return templates.TemplateResponse(request, "kanban.html", {"columns": columns, "score_profile": score_profile})
+    # 2026-11-03: "interesting" is the exception to active_only=False above.
+    # It is an open backlog, not application history — a vacancy you never
+    # applied to that is INACTIVE (closed) or whose deadline has passed can no
+    # longer be acted on and only clutters the column (16 of 20 were dead).
+    # Display-only: nothing is changed in the DB. NULL deadline = unknown = keep.
+    today = datetime.now(ZoneInfo("Europe/Oslo")).date().isoformat()
+    interesting = columns["interesting"]
+    columns["interesting"] = [
+        v for v in interesting
+        if v["status"] == "ACTIVE" and (v["application_due_sort"] or "9999-99-99") >= today
+    ]
+    hidden_interesting = len(interesting) - len(columns["interesting"])
+    return templates.TemplateResponse(
+        request, "kanban.html",
+        {"columns": columns, "score_profile": score_profile, "hidden_interesting": hidden_interesting},
+    )
 
 
 def _safe_sync(source_fn, conn) -> dict:

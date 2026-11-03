@@ -1041,7 +1041,7 @@ def list_vacancies(
         SELECT uuid, title, business_name, municipal, language, source,
                user_status, application_due, published, sector, {score_col} AS score,
                link, application_url, excluded, exclusion_reason, extent_percent, county,
-               salary_text, first_seen_at, flagged_at, notes
+               salary_text, first_seen_at, flagged_at, notes, status, application_due_sort
         FROM vacancies
         {where}
         {order_clause}

@@ -7,6 +7,9 @@
   {% for status, vacancies in columns.items() %}
   <div class="kanban-column">
     <div class="kanban-column-header">{{ STATUS_LABELS[status] }} <span class="kanban-count">{{ vacancies|length }}</span></div>
+    {% if status == "interesting" and hidden_interesting %}
+    <p class="kanban-empty">+ {{ hidden_interesting }} закритих/прострочених приховано</p>
+    {% endif %}
     <div class="kanban-cards">
       {% for v in vacancies %}
       <div class="kanban-card">
