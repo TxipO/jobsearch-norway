@@ -54,19 +54,17 @@ _REGION_WORDS_RE = re.compile(r"^Greater\s+|\s+(?:Metropolitan\s+)?(?:Region|Are
 
 # Shorter than the shared 60-day window on purpose. A LinkedIn digest carries no
 # deadline and no closing signal, and a job shows up in the digests for a median
-# of ONE day (p90 20 days, measured on 309 jobs, 2026-10-08) — so a card from a
-# mail 40 days old is almost certainly a closed job, yet a row's first_seen_at
-# starts the moment we insert it. With the 60-day window, the first sync after
-# the 2026-10-08 parser fix would have inserted 107 jobs last seen 31-60 days
-# ago as "new". Was 21 days; cut to 14 on 2026-10-27 (see below).
+# of ONE day (p90 20 days, measured on 309 jobs, 2026-10-08) -- a row's
+# first_seen_at starts the moment we insert it, so old cards would enter as "new".
 # The same window defines "closed": sync() deletes untouched rows absent from
-# every digest in it (db.retire_linkedin_absent_from_digests). Measured
-# 2026-10-27 over 73 digest mails of the last 21 days: 152 of 160 jobs appear
-# in exactly ONE mail, so "days since the mail" is the job's age; a job mailed
-# 19 days earlier (>100 applicants) was already closed, and every closed job
-# found so far was >=19 days past its mail. 14 days still covers a two-week
-# gap between syncs.
-LINKEDIN_LOOKBACK_DAYS = 14
+# every digest in it (db.retire_linkedin_absent_from_digests); 152 of 160 jobs
+# appear in exactly ONE mail (2026-10-27), so "days since the mail" is the job's
+# age. 7, not 14: a job was already closed <=10 days after its mail (2026-11-04),
+# and LinkedIn's guest pages still show closed jobs as open, so there is no
+# unauthenticated closure check. Trade-offs: a still-open job over a week past
+# its mail drops out unless the user reacted (status/notes/flag keep it), and a
+# gap between syncs longer than 7 days means cards from mails in it are never inserted.
+LINKEDIN_LOOKBACK_DAYS = 7
 
 
 def fetch_digest_texts() -> list[str]:
