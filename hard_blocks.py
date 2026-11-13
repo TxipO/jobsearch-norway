@@ -426,8 +426,15 @@ _HEALTH_CONTEXT_RE = re.compile(
 # og autoriseres jfr. Sikkerhetsloven" slipped through — a subject between
 # "må" and "kunne" (up to 3 words: du / vedkommende / den som ansettes), and
 # "jfr."/"jf."/"i henhold til"/"iht." instead of "etter" before the law name.
+#
+# Sixth round, 2026-11-13: Eccera's "Stillingen krever at den aktuelle
+# kandidaten kan sikkerhetsklareres i Norge og NATO" — no "må", the verb is
+# "krever/forutsetter at <subject> kan/kunne". Bare "kan sikkerhetsklareres"
+# stays unmatched (hedges: "kan kreve at du kan sikkerhetsklareres").
 SECURITY_CLEARANCE_RE = re.compile(
-    r"(må (?:\w+ ){0,3}kunne sikkerhetsklareres|krav(?:er)? (?:om|til) sikkerhetsklarering|"
+    r"(må (?:\w+ ){0,3}kunne sikkerhetsklareres|"
+    r"(?:krever|forutsetter|forutsetning|krav om) at (?:\w+ ){0,6}?(?:kan|kunne) sikkerhetsklareres|"
+    r"sikkerhetsklareres i norge og nato|krav(?:er)? (?:om|til) sikkerhetsklarering|"
     r"vilkår for sikkerhetsklarering|kreve(?:r)? sikkerhetsklarering|"
     r"autoriseres for (?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
     r"klareres for (?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"

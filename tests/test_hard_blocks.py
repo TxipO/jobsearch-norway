@@ -757,6 +757,22 @@ def test_security_clearance_pronoun_phrasing_hedged_not_blocked():
         assert not check_exclusion("Systemutvikler", body)[0], body
 
 
+def test_security_clearance_krever_at_kan_blocked_and_hedged_not():
+    """Eccera 2026-11-13: "krever at ... kan sikkerhetsklareres" (no "må")."""
+    for body in [
+        "Stillingen krever at den aktuelle kandidaten kan sikkerhetsklareres i Norge og NATO.",
+        "Ansettelse forutsetter at du kan sikkerhetsklareres for nivå hemmelig.",
+    ]:
+        assert check_exclusion("Systemutvikler", body)[0], body
+    for body in [
+        "Enkelte stillinger kan kreve at du kan sikkerhetsklareres.",
+        "Det er en fordel om du kan sikkerhetsklareres.",
+        "Enkelte stillinger krever at du kan sikkerhetsklareres.",
+        "Stillingen krever ikke at du kan sikkerhetsklareres.",
+    ]:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
 def test_authorisation_negated_or_soft_not_blocked():
     for body in [
         "Det er en fordel med autorisasjon som helsefagarbeider",
