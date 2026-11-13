@@ -1156,3 +1156,24 @@ def test_languages_the_user_speaks_are_not_blocked_by_speaker_titles():
     ):
         excluded, _ = check_exclusion(title, "")
         assert not excluded, title
+
+
+def test_bare_authorised_profession_bullet_blocked():
+    """Vestre Viken IKT-rådgiver: title is IT, qualifications list opens with
+    a bare 'Autorisert Radiograf'."""
+    excluded, reason = check_exclusion(
+        "IKT-rådgiver",
+        "Kvalifikasjoner:\n- Autorisert Radiograf\n- Relevant tilleggsutdanning fra spesialisthelsetjenesten",
+    )
+    assert excluded and "авторизація" in reason
+
+
+def test_authorised_profession_soft_or_employer_not_blocked():
+    # Known limit: "autorisert sykepleier eller IKT-utdanning" is dropped via the "eller" lookahead.
+    for body in [
+        "Det er en fordel om du er autorisert radiograf",
+        "Autorisert sykepleier eller IKT-utdanning",
+        "Vi er autorisert lærebedrift",
+        "Norsk autorisasjon kreves for søkere som er sykepleiere.",
+    ]:
+        assert not check_exclusion("IKT-rådgiver", body)[0], body

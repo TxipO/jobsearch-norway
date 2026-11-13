@@ -357,6 +357,17 @@ BODY_AUTHORISATION_PATTERNS = [
     # som sykepleier" and a bare bullet "autorisasjon som sykepleier".
     r"autorisasjon som (sykepleier|sjukepleiar|helsefagarbeider|vernepleier|lege|fysioterapeut)",
     r"godkjent autorisasjon fra helsedirektoratet",
+    # "Autorisert Radiograf" as a bare qualification bullet (Vestre Viken
+    # IKT-rådgiver, 2026-11-13). Singular profession only, so the employer
+    # self-description "autorisert lærebedrift" never matches; "eller"/"/"
+    # after it means an alternative ("autorisert sykepleier eller IKT-utdanning").
+    r"(?<!fortrinnsvis )\bautorisert (?:som )?(?:radiograf|sykepleier|sjukepleiar|lege|bioingeniør|fysioterapeut|"
+    r"ergoterapeut|jordmor|psykolog|farmasøyt|helsefagarbeider|vernepleier|tannpleier|tannlege|"
+    r"hjelpepleier|ambulansearbeider|optiker|kiropraktor)\b(?!\s+(?:eller|/))"
+    r"(?! for søkere)(?! for deg som)"
+    # Alternatives / preferences are not a firm requirement: a comma list, "eller annen/tilsvarende",
+    # "fortrinnsvis", "ufaglærte kan også søke" (live 2026-11-13).
+    r"(?!\s*,)(?![^.\n]{0,60}?\beller (?:annen|andre|tilsvarende|lignende))(?![^\n]{0,40}ufaglært)",
 ]
 
 # Generic "authorisation required" — but NOT the conditional
