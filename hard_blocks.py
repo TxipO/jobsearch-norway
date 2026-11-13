@@ -442,8 +442,35 @@ SECURITY_CLEARANCE_RE = re.compile(
     r"autoriseres (?:etter|jfr?\.?|i henhold til|iht\.?) sikkerhetsloven|"
     r"sikkerhetsklarering (?:på|til|for) (?:nivå )?"
     r"(?:begrenset|konfidensielt|hemmelig|strengt hemmelig)|"
-    r"(?:inneha|kvalifisere (?:til|for)) sikkerhetsklarering)"
+    r"(?:inneha|kvalifisere (?:til|for)) sikkerhetsklarering|"
+    r"(?:tilfredsstille|oppfylle)r?\s+(?:\w+\s+){0,2}kravene?\s+(?:til|om)\s+sikkerhetsklarering|"
+    r"opprettholde[rt]?\s+(?:\w+\s+){0,1}(?:sikkerhets)?klarering)"
 )
+# Seventh round, 2026-11-13: NSM's "Videre må du tilfredsstille kravene til
+# sikkerhetsklarering og autorisasjon på høyeste nivå. Det er en forutsetning
+# at du opprettholder din klarering" — "kravene" (definite plural) and a
+# verb other than "inneha"/"krever" were not covered.
+
+# Hard Norwegian-citizenship-only requirement. The user is not a Norwegian
+# citizen, so such ads are unreachable whatever they say about clearance.
+# Judged per clause via _match_is_firm like the clearance rule, so "ikke krav
+# om norsk statsborgerskap" stays unblocked; "uavhengig av statsborgerskap",
+# "EØS-borger" and citizenship of the people the job serves do not match.
+NORWEGIAN_CITIZENSHIP_ONLY_RE = re.compile(
+    r"(?:kan\s+ikke\s+inneha\s+(?:noe\s+)?annet\s+statsborgerskap\s+enn\s+norsk|"
+    r"må\s+(?:\w+\s+){0,3}(?:være\s+norsk(?:e)?\s+statsborger|ha\s+norsk\s+statsborgerskap)|"
+    r"kun\s+norsk(?:e)?\s+statsborger|"
+    r"krav\s+om\s+norsk\s+statsborgerskap|"
+    r"norsk\s+statsborgerskap\s+er\s+(?:et|en)\s+(?:krav|forutsetning)|"
+    r"(?:must|have\s+to)\s+be\s+a\s+norwegian\s+(?:citizen|national)|"
+    r"norwegian\s+citizenship\s+is\s+(?:required|mandatory|a\s+requirement))"
+)
+NORWEGIAN_CITIZENSHIP_ONLY_REASON = "Вимагається лише норвезьке громадянство — недосяжно"
+
+
+def _has_norwegian_citizenship_only_requirement(text: str) -> bool:
+    return any(_match_is_firm(text, m) for m in NORWEGIAN_CITIZENSHIP_ONLY_RE.finditer(text))
+
 
 
 # Employer-wide "SOME positions may need X" disclaimer. Widened 2026-10-05
@@ -1000,6 +1027,9 @@ def check_exclusion(
 
     if _has_definite_security_clearance_requirement(body_l) or _has_definite_security_clearance_requirement_en(body_l):
         return True, "Потрібен допуск до державної таємниці (sikkerhetsklarering) — недосяжно без громадянства"
+
+    if _has_norwegian_citizenship_only_requirement(body_l):
+        return True, NORWEGIAN_CITIZENSHIP_ONLY_REASON
 
     if _has_eu_passport_requirement(body_l):
         return True, "Вакансія фізично за кордоном (вимагає EU passport), не в Норвегії"

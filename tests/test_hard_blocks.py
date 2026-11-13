@@ -773,6 +773,58 @@ def test_security_clearance_krever_at_kan_blocked_and_hedged_not():
         assert not check_exclusion("Systemutvikler", body)[0], body
 
 
+def test_security_clearance_tilfredsstille_kravene_blocked_and_hedged_not():
+    """NSM 2026-11-13."""
+    for body in [
+        "Videre må du tilfredsstille kravene til sikkerhetsklarering og autorisasjon "
+        "på høyeste nivå. Det er en forutsetning at du som ansatt opprettholder din "
+        "klarering gjennom hele ansettelsesløpet.",
+        "Du må oppfylle kravene til sikkerhetsklarering.",
+        "Det er en forutsetning at du opprettholder din klarering.",
+    ]:
+        assert check_exclusion("Systemutvikler", body)[0], body
+    for body in [
+        "Enkelte stillinger krever at du kan oppfylle kravene til sikkerhetsklarering.",
+        "Det er en fordel at du kan tilfredsstille kravene til sikkerhetsklarering.",
+        "Du trenger ikke tilfredsstille kravene til sikkerhetsklarering.",
+    ]:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
+def test_clearance_phrasing_across_hard_line_breaks_blocked():
+    body = ("Det er en forutsetning at du som\nansatt opprettholder din klarering gjennom hele\n"
+            "ansettelsesløpet. Videre må du tilfredsstille\nkravene  til\nsikkerhetsklarering.")
+    assert check_exclusion("Systemutvikler", body)[0]
+    assert check_exclusion("Systemutvikler", "Du må oppfylle\nkravene til sikkerhetsklarering.")[0]
+
+
+def test_norwegian_citizenship_only_blocked_and_soft_forms_not():
+    for body in [
+        "Du kan ikke inneha annet statsborgerskap enn norsk.",
+        "Du kan ikke inneha noe annet statsborgerskap enn norsk.",
+        "Du må være norsk statsborger.",
+        "Det er krav om norsk statsborgerskap.",
+        "Norsk statsborgerskap er et krav.",
+        "Norsk statsborgerskap er en forutsetning for stillingen.",
+        "Kvalifikasjoner:\n- Kun norsk statsborger\n- Førerkort klasse B",
+        "Kun norske statsborgere kan søke.",
+        "Du kan ikke inneha annet statsborgerskap\nenn norsk.",
+        "You must be a Norwegian citizen.",
+        "Norwegian citizenship is required.",
+    ]:
+        excluded, reason = check_exclusion("Systemutvikler", body)
+        assert excluded and "громадянство" in reason, body
+    for body in [
+        "Søkere kan ha ulikt statsborgerskap, uavhengig av statsborgerskap.",
+        "Norsk statsborgerskap er ikke et krav.",
+        "Ingen krav om norsk statsborgerskap.",
+        "Du må være EØS-borger.",
+        "Vi hjelper brukere som er norsk statsborger med å søke om pass.",
+        "Norwegian citizenship is not required.",
+    ]:
+        assert not check_exclusion("Systemutvikler", body)[0], body
+
+
 def test_authorisation_negated_or_soft_not_blocked():
     for body in [
         "Det er en fordel med autorisasjon som helsefagarbeider",
