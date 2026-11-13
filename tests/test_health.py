@@ -1,7 +1,7 @@
 """health.evaluate_sources / stale_code. Every rule below is tied to a failure
 that really happened and raised no error: NAV's cursor stuck on an ETag
 (2026-08-31, "+0 new" for two days), LinkedIn's parser dropping 89% of the jobs
-(weeks), EasyCruit's hand-kept id list going stale (two months), and a server
+(weeks), EasyCruit's old hand-kept id list going stale (two months), and a server
 still running yesterday's code."""
 
 import os
@@ -106,9 +106,8 @@ def test_linkedin_parse_gap_is_bad(tmp_path):
     assert li["level"] == "bad" and "160 of 200" in li["message"]
 
 
-def test_easycruit_stale_list_warning_is_only_a_warn(tmp_path):
-    """The hand-kept id list had not been refreshed for two months; the only
-    symptom was "failed: 8"."""
+def test_easycruit_fetch_failures_warning_is_only_a_warn(tmp_path):
+    """Detail-fetch failures surface as a plain warning, never "bad"."""
     conn = _healthy_conn(tmp_path)
     ec = {"known": 13, "fetched": 5, "failed": 8, "warning": "8 of 13 stored vacancies could not be fetched"}
     issue = _by_source(health.evaluate_sources(conn, _summary(easycruit=ec), now=NOW))["EasyCruit"]

@@ -4,8 +4,6 @@ mocked out per test_jobbnorge_client.py's pattern, no real network calls
 here (that's covered by the manual verification that shaped this module —
 see its docstring for why the list page can't be hit at all)."""
 
-from datetime import datetime, timedelta, timezone
-
 import requests
 
 import db
@@ -63,6 +61,13 @@ class FakeResponse:
 
     def raise_for_status(self):
         pass
+
+
+ROW = {"uuid": "easycruit-sogndal-111", "status": "ACTIVE", "title": "Job A",
+       "description": "A real description long enough to matter here today.",
+       "municipal": "Sogndal", "county": "Vestland", "business_name": "Sogndal kommune",
+       "employer_name": "Sogndal kommune", "application_url": "https://x", "link": "https://x",
+       "application_due": None, "engagement_type": None, "extent": None, "sector": None}
 
 
 def _make_conn(tmp_path):
@@ -149,7 +154,7 @@ def test_known_ids_roundtrip(tmp_path):
 
 def test_sync_upserts_each_known_id(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
-    ec.set_known_ids(conn, [("111", "1"), ("222", "2")])
+    monkeypatch.setattr(ec, "fetch_vacancy_ids", lambda: [("111", "1"), ("222", "2")])
 
     fake_rows = {
         ("111", "1"): {"uuid": "easycruit-sogndal-111", "status": "ACTIVE", "title": "Job A",
@@ -164,14 +169,14 @@ def test_sync_upserts_each_known_id(tmp_path, monkeypatch):
     result = ec.sync(conn)
 
     assert {k: result[k] for k in ("known", "fetched", "failed")} == {"known": 2, "fetched": 1, "failed": 1}
-    assert "1 of 2" in result["warning"]
+    assert "1 of 2 listed" in result["warning"]
     assert db.get_vacancy(conn, "easycruit-sogndal-111")["title"] == "Job A"
     assert db.get_vacancy(conn, "easycruit-sogndal-222") is None
 
 
 def test_sync_survives_a_network_failure_on_one_id(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
-    ec.set_known_ids(conn, [("111", "1")])
+    monkeypatch.setattr(ec, "fetch_vacancy_ids", lambda: [("111", "1")])
 
     def raise_error(vid, did):
         raise requests.RequestException("timeout")
@@ -182,9 +187,9 @@ def test_sync_survives_a_network_failure_on_one_id(tmp_path, monkeypatch):
     assert {k: result[k] for k in ("known", "fetched", "failed")} == {"known": 1, "fetched": 0, "failed": 1}
 
 
-def test_sync_is_silent_when_the_list_is_fresh_and_everything_fetches(tmp_path, monkeypatch):
+def test_sync_is_silent_when_everything_fetches(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
-    ec.set_known_ids(conn, [("111", "1")])
+    monkeypatch.setattr(ec, "fetch_vacancy_ids", lambda: [("111", "1")])
     row = {"uuid": "easycruit-sogndal-111", "status": "ACTIVE", "title": "Job A",
            "description": "A real description long enough to matter here today.",
            "municipal": "Sogndal", "county": "Vestland", "business_name": "Sogndal kommune",
@@ -194,23 +199,50 @@ def test_sync_is_silent_when_the_list_is_fresh_and_everything_fetches(tmp_path, 
     assert ec.sync(conn) == {"known": 1, "fetched": 1, "failed": 0}
 
 
-def test_sync_warns_when_the_hand_maintained_list_has_gone_stale(tmp_path, monkeypatch):
-    """2026-10-08: the id list sat untouched for two months while Sogndal posted
-    four new vacancies (the list page is behind a WAF challenge, so nothing can
-    discover them automatically) — and the only symptom was "failed: 8" for the
-    closed ones. A list older than IDS_STALE_AFTER_DAYS is now reported."""
+XML = """<?xml version="1.0" encoding="utf-8"?>
+<VacancyList xmlns="urn:EasyCruit" generated="2026-11-13">
+ <Vacancy id="111"><Departments><Department id="1"><Name>A</Name></Department><Department id="9"/></Departments></Vacancy>
+ <Vacancy id="222"><Departments><Department id="2"><Name>B</Name></Department></Departments></Vacancy>
+ <Vacancy id="333"><Departments/></Vacancy>
+</VacancyList>"""
+
+
+class FakeXml(FakeResponse):
+    pass
+
+
+def test_fetch_vacancy_ids_parses_first_department(monkeypatch):
+    monkeypatch.setattr(ec.requests, "get", lambda *a, **k: FakeXml(XML))
+    assert ec.fetch_vacancy_ids() == [("111", "1"), ("222", "2")]
+
+
+def test_sync_uses_xml_list_and_stores_it(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
-    ec.set_known_ids(conn, [])
-    old = (datetime.now(timezone.utc) - timedelta(days=ec.IDS_STALE_AFTER_DAYS + 1)).strftime("%Y-%m-%d %H:%M:%S")
-    db.set_state(conn, ec.IDS_REFRESHED_AT_KEY, old)
-    assert "last refreshed" in ec.sync(conn)["warning"]
+    monkeypatch.setattr(ec, "fetch_vacancy_ids", lambda: [("111", "1")])
+    seen = []
+    monkeypatch.setattr(ec, "fetch_vacancy_detail", lambda v, d: seen.append((v, d)) or None)
+    result = ec.sync(conn)
+    assert seen == [("111", "1")] and ec.get_known_ids(conn) == [("111", "1")]
+    assert "1 of 1 listed" in result["warning"] and "list.xml" not in result["warning"]
 
-    ec.set_known_ids(conn, [])  # refreshing the list clears it
-    assert "warning" not in ec.sync(conn)
 
-
-def test_sync_warns_when_the_list_has_no_refresh_date_at_all(tmp_path):
-    """A database from before this timestamp existed: treat unknown as stale."""
+def test_sync_falls_back_to_stored_ids_with_one_warning(tmp_path, monkeypatch):
     conn = _make_conn(tmp_path)
-    db.set_state(conn, ec.KNOWN_IDS_KEY, "[]")
-    assert "never" in ec.sync(conn)["warning"]
+    ec.set_known_ids(conn, [("111", "1")])
+
+    def boom():
+        raise requests.RequestException("down")
+
+    monkeypatch.setattr(ec, "fetch_vacancy_ids", boom)
+    monkeypatch.setattr(ec, "fetch_vacancy_detail", lambda v, d: ROW)
+    result = ec.sync(conn)
+    assert result["fetched"] == 1 and result["warning"].count("list.xml") == 1
+    assert "last refreshed" not in result["warning"]
+
+
+def test_sync_has_no_staleness_warning_for_an_old_stored_list(tmp_path, monkeypatch):
+    conn = _make_conn(tmp_path)
+    monkeypatch.setattr(ec, "fetch_vacancy_ids", lambda: [("111", "1")])
+    monkeypatch.setattr(ec, "fetch_vacancy_detail", lambda v, d: ROW)
+    db.set_state(conn, ec.IDS_REFRESHED_AT_KEY, "2020-01-01 00:00:00")
+    assert ec.sync(conn) == {"known": 1, "fetched": 1, "failed": 0}

@@ -43,7 +43,7 @@ def test_linkedin_sync_does_not_count_tombstoned_rows(tmp_path, monkeypatch):
 
 def test_easycruit_sync_does_not_count_tombstoned_row(tmp_path, monkeypatch):
     conn = db.connect(tmp_path / "t.db")
-    ec.set_known_ids(conn, [("111", "1")])
+    monkeypatch.setattr(ec, "fetch_vacancy_ids", lambda: [("111", "1")])
     row = {"uuid": "easycruit-sogndal-111", "status": "ACTIVE", "title": "Job A",
            "description": "A real description long enough to matter here today.",
            "municipal": "Sogndal", "county": "Vestland", "business_name": "Sogndal kommune",

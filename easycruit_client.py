@@ -1,33 +1,23 @@
 """Sogndal kommune's EasyCruit-hosted job listings.
 
 Deliberately NOT a nationwide "4th source": EasyCruit is per-tenant
-subdomain (like Webcruiter — see jobsearch-norway-sources memory), no
-central index across employers, so a general EasyCruit aggregator is the
-same architectural dead end Webcruiter already was. This one tenant is
-worth it on its own merits: Sogndal kommune is the user's #1 priority
-location, and measured 2026-07-19, 0 of its 13 active listings overlap
-with anything already in the DB via NAV/Jobbnorge.
+subdomain (like Webcruiter), no central index across employers. This one
+tenant is worth it on its own merits: Sogndal kommune is the user's #1
+priority location, and (measured 2026-07-19) none of its listings overlap
+with NAV/Jobbnorge.
 
-Also deliberately NOT built like nav_client.py/jobbnorge_client.py, which
-poll a list/search endpoint automatically every sync. Here the LIST page
-(https://sogndal.easycruit.com/) sits behind an AWS WAF JS challenge — a
-plain `requests.get()` gets back "202 Accepted" with an empty body and an
-`x-amzn-waf-action: challenge` header, not the listing. Individual vacancy
-DETAIL pages (once you know the id) are NOT challenged at all — 200 OK,
-full HTML, plain requests. Adding a headless-browser dependency
-(Playwright, ~300MB Chromium download) just to defeat one WAF challenge
-for ~13 listings from a single employer wasn't worth it, so the known
-vacancy-id list is refreshed by hand instead (open the list page in a
-real browser, copy the current /vacancy/{id}/{department_id} links) and
-stored via set_known_ids(); sync() only ever fetches the WAF-free detail
-pages.
+The HTML list page (https://sogndal.easycruit.com/) sits behind an AWS WAF
+JS challenge, but the official XML export (/export/xml/vacancy/list.xml) is
+not (found 2026-11-13) and lists every current vacancy, so sync() reads the
+ids from it each run. Detail pages are WAF-free plain HTML.
 """
 
 import html as html_lib
 import json
 import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 
 import requests
 
@@ -36,12 +26,8 @@ from db import get_state, set_state, upsert_vacancy_row
 BASE_URL = "https://sogndal.easycruit.com"
 KNOWN_IDS_KEY = "easycruit_sogndal_known_ids"
 IDS_REFRESHED_AT_KEY = "easycruit_sogndal_ids_refreshed_at"
-# The id list is hand-maintained (the list page is behind a WAF challenge), so
-# nothing tells us when Sogndal posts something new. Found 2026-10-08: the list
-# had not been refreshed since 2026-08-07, 4 new vacancies (nurses, a health
-# station manager, a kindergarten assistant) were invisible for two months, and
-# 8 of the 13 stored ids had closed — all of it reported only as "failed: 8".
-IDS_STALE_AFTER_DAYS = 14
+LIST_URL = f"{BASE_URL}/export/xml/vacancy/list.xml"
+_NS = {"ec": "urn:EasyCruit"}
 
 _TITLE_RE = re.compile(r'<meta property="og:title" content="([^"]*)"')
 _DESCRIPTION_RE = re.compile(r'<div class="jd-description">(.*?)</div>\s*<div class="bottom-buttons">', re.DOTALL)
@@ -53,11 +39,21 @@ _TYPE_RE = re.compile(r'<div class="jd-type">\s*<h3>[^<]*</h3>\s*<p>([^<]*)</p>'
 
 
 def set_known_ids(conn: sqlite3.Connection, ids: list[tuple[str, str]]) -> None:
-    """ids: list of (vacancy_id, department_id) pairs scraped by hand from
-    the list page — see this module's docstring for why this can't be
-    automated the same way NAV/Jobbnorge are."""
+    """Store the last list read from list.xml (fallback if the next read fails)."""
     set_state(conn, KNOWN_IDS_KEY, json.dumps(ids))
     set_state(conn, IDS_REFRESHED_AT_KEY, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def fetch_vacancy_ids() -> list[tuple[str, str]]:
+    """(vacancy_id, first department_id) for every vacancy in the XML export."""
+    resp = requests.get(LIST_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+    resp.raise_for_status()
+    ids = []
+    for vac in ET.fromstring(resp.content).findall("ec:Vacancy", _NS):
+        dep = vac.find("ec:Departments/ec:Department", _NS)
+        if dep is not None and vac.get("id") and dep.get("id"):
+            ids.append((vac.get("id"), dep.get("id")))
+    return ids
 
 
 def get_known_ids(conn: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -134,17 +130,20 @@ def fetch_vacancy_detail(vacancy_id: str, department_id: str) -> dict | None:
 
 
 def sync(conn: sqlite3.Connection) -> dict:
-    known_ids = get_known_ids(conn)
+    warnings = []
+    try:
+        known_ids = fetch_vacancy_ids()
+        set_known_ids(conn, known_ids)
+    except (requests.RequestException, ET.ParseError):
+        known_ids = get_known_ids(conn)
+        warnings.append("the automatic vacancy list (list.xml) could not be read; using the last stored list")
     fetched, failed = 0, 0
     for vacancy_id, department_id in known_ids:
         try:
             row = fetch_vacancy_detail(vacancy_id, department_id)
         except (requests.RequestException, UnicodeDecodeError):
-            # UnicodeDecodeError isn't a RequestException subclass — without
-            # catching it here too, one malformed/truncated response would
-            # propagate uncaught out of sync(), and sync.py's CLI entry
-            # point has no outer guard around this call at all, unlike
-            # web/app.py's /sync route.
+            # UnicodeDecodeError isn't a RequestException subclass; one
+            # malformed response must not abort sync() (sync.py has no outer guard).
             failed += 1
             continue
         if row is None:
@@ -154,20 +153,9 @@ def sync(conn: sqlite3.Connection) -> dict:
         if upsert_vacancy_row(conn, row, source="easycruit"):
             fetched += 1
     stats = {"known": len(known_ids), "fetched": fetched, "failed": failed}
-    warnings = []
     if failed:
-        warnings.append(
-            f"{failed} of {len(known_ids)} stored vacancies could not be fetched "
-            f"(closed since the list was made, or the page changed)"
-        )
-    refreshed = get_state(conn, IDS_REFRESHED_AT_KEY)
-    if refreshed is None or datetime.strptime(refreshed, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(days=IDS_STALE_AFTER_DAYS):
-        warnings.append(
-            f"the hand-maintained vacancy list was last refreshed {refreshed or 'never (unknown)'} — "
-            f"new Sogndal vacancies are invisible until it is refreshed from the list page "
-            f"(see this module's docstring)"
-        )
+        # The list is current, so a failure is a real problem, not a closed vacancy.
+        warnings.append(f"{failed} of {len(known_ids)} listed vacancies could not be fetched (page changed or site error)")
     if warnings:
         stats["warning"] = "; ".join(warnings)
     return stats

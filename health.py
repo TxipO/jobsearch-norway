@@ -7,7 +7,7 @@ Why this exists (2026-10-08): almost none of our real incidents raised an
 error. They were syncs that *succeeded* and quietly brought less than they
 should — NAV's cursor stuck on an ETag (2 days, "+0 new" looked like a slow
 news day), LinkedIn's parser dropping 89% of the jobs (weeks), EasyCruit's
-hand-kept id list going stale (2 months), a server still running yesterday's
+hand-kept id list going stale (2 months; now read from list.xml automatically), a server still running yesterday's
 code. try/except catches none of those; an invariant per source does.
 
 Deliberately NOT a general anomaly detector: the per-day cadence differs too
@@ -36,7 +36,7 @@ SYNC_STALE_DAYS = 3
 # new rows, and its only zero day was the cursor stall itself; finn never below
 # 11; LinkedIn ~5/day once its parser worked; Jobbnorge zero on 5 weekend/holiday
 # days. EasyCruit is absent on purpose — it is quiet by nature, and its own
-# staleness check (the hand-kept id list) lives in easycruit_client.
+# list.xml read lives in easycruit_client.
 FRESHNESS_DAYS = {"nav": (1.5, 3), "finn": (3, 7), "linkedin": (5, 10), "jobbnorge": (5, 10)}
 
 _FRESHNESS_HINT = {
@@ -48,7 +48,7 @@ _FRESHNESS_HINT = {
 _FRESHNESS_ACTION = {"nav": "Скажи Claude: перевірити курсор NAV"}
 
 # A parse gap on a mail source is lost data (a card exists in the mail and never
-# reaches the DB); any other warning (e.g. EasyCruit's stale list) is "needs a look".
+# reaches the DB); any other warning (e.g. EasyCruit's unreadable list.xml) is "needs a look".
 _DATA_LOSS_SOURCES = {"finn", "linkedin"}
 _MASS_DEACTIVATION_SHARE = 0.3
 
