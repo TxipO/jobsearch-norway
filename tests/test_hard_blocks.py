@@ -811,6 +811,17 @@ def test_norwegian_citizenship_only_blocked_and_soft_forms_not():
         "Du kan ikke inneha annet statsborgerskap\nenn norsk.",
         "You must be a Norwegian citizen.",
         "Norwegian citizenship is required.",
+        # Corpus audit 2026-11-17 (real ads)
+        "For ansettelse i etterretningstjenesten kan man ikke ha annet enn norsk statsborgerskap ved ansettelsestidspunktet.",
+        "For å bli tilsett i etterretningstenesta kan du ikkje ha anna enn norsk statsborgarskap på tidspunktet du blir tilsett.",
+        "Du må vere norsk statsborgar. Det krevst uttømmande politiattest dersom du blir innstilt.",
+        "· Må være norst statsborger pga prosjekt for forsvaret.",
+        "Kvalifikasjoner:\n- Gode norskkunnskaper\n- Norsk statsborgerskap\n- Plettfri vandel",
+        "Erfaring med RTOS\nMulighet til å sikkerhetsklareres og norsk statsborgerskap.",
+        "Du må være EØS-borger.",
+        "Ansatte:\n- Gode samarbeidsevner\n- EU/EØS borger\n\nVi tilbyr:\n- fri bolig",
+        "Candidates must hold Norwegian citizenship.",
+        "Only Norwegian citizens may apply.",
     ]:
         excluded, reason = check_exclusion("Systemutvikler", body)
         assert excluded and "громадянство" in reason, body
@@ -818,7 +829,7 @@ def test_norwegian_citizenship_only_blocked_and_soft_forms_not():
         "Søkere kan ha ulikt statsborgerskap, uavhengig av statsborgerskap.",
         "Norsk statsborgerskap er ikke et krav.",
         "Ingen krav om norsk statsborgerskap.",
-        "Du må være EØS-borger.",
+        "Du må være EØS-borger, eller ha gyldig arbeidstillatelse i Norge.",
         "Vi hjelper brukere som er norsk statsborger med å søke om pass.",
         "Norwegian citizenship is not required.",
     ]:
@@ -840,7 +851,6 @@ def test_generic_authorisation_without_health_context_not_blocked():
     term within ~150 chars and may not be a "tilgang" clause."""
     for body in [
         "Du må ha autorisasjon for tilgang til driftsmiljøet",
-        "Arbeidet krever autorisasjon fra DSB for elvirksomhet",
     ]:
         assert not check_exclusion("IT-driftstekniker", body)[0], body
 

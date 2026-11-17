@@ -95,6 +95,26 @@ HEALTH_TITLE_PATTERNS = [
     r"\bambulanse(?!stasjon)", r"\bparamedic", r"\boptiker", r"\bkiropraktor",
     r"\bhelsesykepleier", r"\bhelsesjukepleiar", r"\bmiljøterapeut",
     r"\bsosionom", r"\bbarnevernspedagog", r"\bhjelpepleier",
+    # Corpus audit 2026-11-17: authorised-profession titles that were visible
+    # (read on the live titles): Veterinær x6, Dyrepleier x6 (protected title
+    # under dyrehelsepersonelloven), Audiograf x8, Psykiater x3, Apoteker/
+    # Sykehusapoteker x4, Radiolog(ist), Gynekolog, Stråleterapeut, "Fagradiograf"
+    # (the \b on radiograf hid the compound), LIS 1/2/3 (doctors in
+    # specialisation), Overlegevikariat, Legevikar(iat), "Medisinstudent/Cand.med.
+    # med lisens" (a student LICENCE he lacks) and English "Anaesthetic Nurse" /
+    # "Travel Nurse" / "Consultant Interventional Cardiologist".
+    # Helsesekretær is NOT here: its ads routinely accept "annen relevant
+    # utdanning", so it is judged on the body (authorised-profession bullets).
+    r"veterinær(?!deg)",  # (?!deg): the employer name "VeteriNærDeg as" in a receptionist ad
+    r"dyrepleier", r"audiograf", r"psykiater", r"\bapoteker\b", r"sykehusapoteker",
+    r"radiolog(?!i(?!st))", r"gynekolog(?!i(?!st))", r"kardiolog(?!i(?!st))", r"stråleterapeut", r"fagradiograf", r"\blis ?[123]\b",
+    r"overlege(?:vikar|stilling)", r"legevikar", r"medisinstudent", r"legestudent", r"cand\.? ?med",
+    r"\bnurse\b", r"\bphysician", r"\bsurgeon",
+    # Same audit, second pass over the titles still visible: "Avdelingsoverlege" (the \boverlege\b
+    # above misses compounds), "Legespesialist?", "sakkyndig lungelege", "spesialist i
+    # indremedisin", "Forskningsoptiker".
+    r"\w*overlege\b", r"legespesialist", r"lungelege",
+    r"spesialist i (?:indremedisin|\w*kirurgi|\w*psykiatri|radiologi|fødselshjelp|\w*medisin)", r"forskningsoptiker",
 ]
 
 # Teaching / pedagogical posts requiring formal Norwegian pedagogical
@@ -121,6 +141,17 @@ TEACHING_TITLE_PATTERNS = [
     r"\bbarnehagelærer", r"\bbarnehagelærar",
     r"\bpedagogisk leder", r"\bpedagogisk leiar",
     r"\bpedagog\b", r"\bspesialpedagog",
+    # Corpus audit 2026-11-17: the plural "Pedagogiske ledere" (x9) and the
+    # pedagog COMPOUNDS slipped past \bpedagog\b: Støttepedagog, Ressurspedagog(er),
+    # Fagpedagog, Montessoripedagog, Språkpedagog, Teiknspråkspedagog,
+    # Ungdomskolepedagog, "Pedagogvikariat" - all posts that need the formal
+    # pedagogical education. "Pedagogisk medarbeider" (the assistant role, no
+    # requirement) and Menighetspedagog (church staff) stay visible.
+    r"\bpedagogiske? lede(?:r|re|iar)(?!.*(?:assistent|fagarbeid))", r"(?:støtte|ressurs|fag|montessori|språk|teiknspråks|ungdomsskole|ungdomskole)pedagog",
+    r"\bpedagogvikar", r"undervisningsstilling", r"undervisningsvikariat",
+    # School principals ("Rektor", "Assisterende rektor", 9 live) need godkjent lærerutdanning (the
+    # bodies say "krav om godkjend lærarutdanning"); "Prorektor" has no \b before "rektor".
+    r"\brektor\b",
 ]
 
 # Academic posts requiring a PhD or at least a master's degree.
@@ -155,6 +186,8 @@ ACADEMIC_TITLE_PATTERNS = [
     # (UiO), "Allaskuvlalektor" x2 (Sámi allaskuvla). A bare "lektor" substring
     # was rejected: "kollektor" is a solar/pipe collector.
     r"høyskolelektor", r"høyskolelærer", r"museumslektor", r"allaskuvlalektor",
+    # Nynorsk "Høgskulelektor i norsk" (corpus audit 2026-11-17).
+    r"høgskulelektor", r"høgskulelærar",
 ]
 
 # Skilled trades gated behind a Norwegian fagbrev / certificate of
@@ -251,6 +284,9 @@ LICENCE_TITLE_PATTERNS = [
     # Driving instructors need the very licence the user does not have: 5 live
     # "Trafikklærer(e/ar)" ads (the teacher patterns above exempt them).
     r"trafikklærer", r"trafikklærar",
+    # Corpus audit 2026-11-17: airline pilot ("Pilot" at Widerøe = ATPL + medical).
+    # "UAS Pilot"/"ROV Pilot" (drone / subsea operators) are deliberately NOT here.
+    r"^pilot$",
 ]
 
 # Regulated legal/finance professions.
@@ -266,6 +302,9 @@ LEGAL_FINANCE_TITLE_PATTERNS = [
     # advokatfirma", "Resepsjonist advokatkontor") needs no bar admission
     # (2026-10-05, /fullreview deep). "advokatfullmektig" stays blocked.
     r"advokat(?!sekretær|sekretar|assistent|firma|kontor)", r"jurist", r"\brevisor", r"\bregnskapsfører",
+    # Corpus audit 2026-11-17: "Eiendomsmegler"/"Eiendomsmegler fullmektig" need the statutory
+    # meglerbevilling; compounds (eiendomsmeglerkjede, eiendomsmegler.no) are not the job.
+    r"eiendomsmegler(?![a-zæøå.])",
     r"\brekneskapsførar",
     # "Juridisk rådgiver" (legal advisor) — same law-degree requirement as
     # "jurist" but a different word (adjective, not the noun "jurist"), so
@@ -299,6 +338,12 @@ LEGAL_FINANCE_TITLE_PATTERNS = [
 # ("Politibetjent 3/2/1" scored 10% and slipped through unblocked).
 POLICE_TITLE_PATTERNS = [
     r"politibetjent", r"politioverbetjent", r"politiførstebetjent", r"politiinspektør",
+    # Corpus audit 2026-11-17: ads titled by the rank code ("Etterforsker PB 3/2/1",
+    # "Etterforskere PB 3/2/1" x3 - the body says "lønnes som politibetjent"), a bare
+    # "Politi", "Grunnstilling politi" and "Politifaglig etterforskningsleder" x4 - all
+    # require the police-academy education. Civilian "Etterforsker"/"Politisk ..."
+    # titles stay visible (see the comment above).
+    r"\bpb ?[0-3]\b", r"^politi$", r"grunnstilling politi", r"politifaglig",
 ]
 
 # Norwegian apprenticeships (lærling/læreplass) — NOT an entry-level path for
@@ -351,26 +396,73 @@ BLOCK_CATEGORIES = [
 # the ad explicitly "søker etter assistenter og helsepersonell" and offers
 # "god opplæring". The negative lookahead below drops any match immediately
 # followed by "for søkere"/"for deg som".
+# Corpus audit 2026-11-17: ~100 visible ads listed an authorised profession as a
+# plain qualification bullet and only the one-profession-per-pattern shape above
+# knew it: "Norsk autorisasjon som helsesekretær" x6, "... som audiograf/jordmor/
+# radiograf/veterinær/provisorfarmasøyt", "Autorisert sykepleier/vernepleier",
+# "sykepleier med norsk autorisasjon", "Autorisert helsefagarbeider eller
+# sykepleier" (a list of authorised professions), "norsk spesialistgodkjenning i ...".
+# So the profession is now a shared LIST (with compounds/plurals, never "-student")
+# and the three shapes - "autorisert X", "autorisasjon som X", "X med autorisasjon" -
+# reuse one tail of guards. The list is matched possessively on purpose: in
+# "autorisert sykepleier eller IKT-utdanning" the list stops at "sykepleier", the
+# "eller" guard fires, and backtracking may not shorten the match around it.
+_AUTH_ONE = (
+    r"(?:[a-zæøå]*(?:sykepleier|sjukepleier|sjukepleiar|helsefagarbeid(?:er|ar)|vernepleier|vernepleiar|hjelpepleier|hjelpepleiar|"
+    r"omsorgsarbeid(?:er|ar)|ambulansearbeid(?:er|ar)|paramedisin(?:er)?|paramedic|tannlege|tannpleier|tannpleiar|"
+    r"tannhelsesekretær|fysioterapeut|ergoterapeut|jordmor|jordmødre|psykolog|psykiater|farmasøyt|apotektekniker|"
+    r"bioingeniør|radiograf|audiograf|optiker|kiropraktor|helsesekretær|veterinær|dyrepleier|dyrepleiar|oralkirurg|"
+    r"helsepersonell)|\b(?:over|spesial|fast)?(?:lege|legar)|\bspesialist)"
+    r"(?:e|er|ere|ar|arar|en|utdanning|utdannelse)?(?![a-zæøå])"
+)
+_AUTH_LIST = _AUTH_ONE + r"(?:-?\s*(?:/|,|og/eller|og|eller)\s*" + _AUTH_ONE + r")*+"
+_AUTH_NOT_PREFERRED = r"(?<!fortrinnsvis )(?<!primært )(?<!gjerne )(?<!helst )(?<!for )(?<!for de som er )(?<!for de som har )"
+# What follows the profession list decides whether it is ONE firm requirement or one of several
+# alternatives. "eller X" / "/ X" is an alternative the user might meet ("eller IKT-utdanning"),
+# unless X is itself a not-yet-qualified health route (students, "i gang med", "venter på godkjenning").
+# A comma continues the requirement ("..., gjerne med erfaring", "..., ønsker korte vikariater")
+# unless it opens an alternative: "eller/evt/annen/tilsvarende", a *sekretær* ("autorisert
+# helsesekretær, medisinsk sekretær, sekretær"), a fagbrev, "relevant utdanning".
+_AUTH_ALT_IS_HEALTH_ROUTE = r"(?![^.\n]{0,50}?(?:student|utdanningsløp|studieløp|under utdanning|i gang med|løp mot|venter på godkjenning|nyutdannet))"
+_AUTH_COMMA_ALTERNATIVE = (
+    r"(?!\s*,\s*(?:eller|og/eller|evt|eventuelt|alternativt|annen|anna|andre|tilsvarende|(?:[a-zæøå-]+\s+)?[a-zæøå-]*sekret[æa]r|fagbrev|"
+    r"relevant\s+(?:utdanning|utdannelse|bakgrunn|kompetanse))\b)(?!\s*,?\s*og/eller)"
+)
+_AUTH_TAIL = (
+    r"(?!\s*(?:eller|/)" + _AUTH_ALT_IS_HEALTH_ROUTE + r")(?! for søkere)(?! for deg som)" + _AUTH_COMMA_ALTERNATIVE +
+    r"(?!(?:(?!\bog\b)[^.\n]){0,60}?\beller (?:annen|andre|tilsvarende|lignende))(?![^\n]{0,40}ufaglært)"
+)
 BODY_AUTHORISATION_PATTERNS = [
-    # "autorisasjon som sykepleier" as a listed qualification — the position is
-    # FOR an authorised professional. Matches both "du har norsk autorisasjon
-    # som sykepleier" and a bare bullet "autorisasjon som sykepleier".
-    r"autorisasjon som (sykepleier|sjukepleiar|helsefagarbeider|vernepleier|lege|fysioterapeut)",
     r"godkjent autorisasjon fra helsedirektoratet",
     # "Autorisert Radiograf" as a bare qualification bullet (Vestre Viken
-    # IKT-rådgiver, 2026-11-13). Singular profession only, so the employer
-    # self-description "autorisert lærebedrift" never matches; "eller"/"/"
-    # after it means an alternative ("autorisert sykepleier eller IKT-utdanning").
+    # IKT-rådgiver, 2026-11-13). Needs a profession from _AUTH_LIST, so the employer
+    # self-description "autorisert lærebedrift" never matches; "eller"/"/" followed
+    # by a non-profession means an alternative ("autorisert sykepleier eller IKT-utdanning").
     # "Offentlig godkjent sykepleier" (Ahus Rådgiver IKT, 2026-11-17) is the legal synonym
     # of "autorisert" under helsepersonelloven: same pattern, same guards.
-    r"(?<!fortrinnsvis )\b(?:autorisert|offentlig godkjent|offentlig godkjenning) (?:som )?(?:radiograf|sykepleier|sjukepleiar|lege|bioingeniør|fysioterapeut|"
-    r"ergoterapeut|jordmor|psykolog|farmasøyt|helsefagarbeider|vernepleier|tannpleier|tannlege|"
-    r"hjelpepleier|ambulansearbeider|optiker|kiropraktor)\b(?!\s*(?:eller|/))"
-    r"(?! for søkere)(?! for deg som)"
-    # Alternatives / preferences are not a firm requirement: a comma list, "eller annen/tilsvarende",
-    # "fortrinnsvis", "ufaglærte kan også søke" (live 2026-11-13).
-    r"(?!\s*,)(?![^.\n]{0,60}?\beller (?:annen|andre|tilsvarende|lignende))(?![^\n]{0,40}ufaglært)",
+    _AUTH_NOT_PREFERRED + r"\b(?:autorisert|autoriserte|offentlig godkjent|offentlig godkjenning|offentleg godkjend|"
+    r"godkjent/autorisert) (?:utdanning |utdannelse )?(?:som )?" + _AUTH_LIST + _AUTH_TAIL,
+    # "autorisasjon som sykepleier" as a listed qualification (a bare bullet or
+    # "du har norsk autorisasjon som sykepleier"), also "norsk autorisasjon som
+    # helsesekretær eller sykepleier".
+    _AUTH_NOT_PREFERRED + r"\b(?:(?:norsk|gyldig|godkjent) )*autorisa(?:sj|j)on (?:(?:som|innen) )?" + _AUTH_LIST + _AUTH_TAIL,
+    # "sykepleier med (norsk) autorisasjon", "sykepleierutdanning med autorisasjon".
+    _AUTH_NOT_PREFERRED + r"\b" + _AUTH_LIST + r"(?:,? (?:med|m/)| må ha| har) (?:gyldig |godkjent )?(?:norsk )?autorisa(?:sj|j)on(?! for søkere)(?! for deg som)"
+    r"(?!(?:(?!\bog\b)[^.\n]){0,60}?\beller (?:annen|andre|tilsvarende|lignende))(?![^\n]{0,40}ufaglært)",
+    # A Norwegian specialist approval is the doctor/dentist-level version of the same thing.
+    r"\bnorsk spesialistgodkjenning\b",
 ]
+# Softeners around the match that _match_is_firm's sub-segment view cannot see: in the same
+# clause, the rest of the line and the NEXT line ("Autorisert helsesekretær. Andre
+# yrkesgrupper med erfaring fra legekontor er velkommen til å søke" / "Autorisert
+# helsesekretær\nAnnen relevant utdanning kan vurderes"). "eventuelt" opens an alternative.
+_AUTH_SOFT_AROUND_RE = re.compile(
+    r"foretrekk|føretrekk|føretrekt|foretrukket|eventuelt|\bev\.|velkommen til å søke|er også velkommen|"
+    r"kan også|kan òg|kan vurderes|vurderes også|kan komme i betrakning|kan være aktuell|kan vere aktuell|"
+    r"oppfordres|oppfordrast|ufaglært|ikke et krav|ikkje (?:eit )?krav|kan fravikes"
+)
+# "Har du kontorfaglig bakgrunn eller er du autorisert helsepersonell?" - the match is itself an alternative.
+_AUTH_ALTERNATIVE_BEFORE_RE = re.compile(r"\beller\s+(?:er|har|som)\s+(?:du\s+)?(?:\w+\s+){0,2}$")
 
 # Generic "authorisation required" — but NOT the conditional
 # "autorisasjon kreves for søkere som er sykepleiere..." shape, which only
@@ -467,23 +559,54 @@ SECURITY_CLEARANCE_RE = re.compile(
 # Hard Norwegian-citizenship-only requirement. The user is not a Norwegian
 # citizen, so such ads are unreachable whatever they say about clearance.
 # Judged per clause via _match_is_firm like the clearance rule, so "ikke krav
-# om norsk statsborgerskap" stays unblocked; "uavhengig av statsborgerskap",
-# "EØS-borger" and citizenship of the people the job serves do not match.
+# om norsk statsborgerskap" stays unblocked; "uavhengig av statsborgerskap"
+# and citizenship of the people the job serves do not match.
+# Corpus audit 2026-11-17 widened it (every phrasing a real ad): Etterretningstjenesten's
+# "kan man ikke ha annet enn norsk statsborgerskap" x20 (only "inneha ... statsborgerskap
+# enn norsk" was covered) and its Nynorsk twin "kan du ikkje ha anna enn norsk
+# statsborgarskap"; Nynorsk "du må vere norsk statsborgar" (politiet, x4) and a typo "norst";
+# bare bullets ("Norsk statsborgerskap", "Mulighet til å sikkerhetsklareres og norsk
+# statsborgerskap") - see _CITIZENSHIP_BULLET_RE; English "must hold Norwegian citizenship".
 NORWEGIAN_CITIZENSHIP_ONLY_RE = re.compile(
-    r"(?:kan\s+ikke\s+inneha\s+(?:noe\s+)?annet\s+statsborgerskap\s+enn\s+norsk|"
-    r"må\s+(?:\w+\s+){0,3}(?:være\s+norsk(?:e)?\s+statsborger|ha\s+norsk\s+statsborgerskap)|"
-    r"kun\s+norsk(?:e)?\s+statsborger|"
-    r"krav\s+om\s+norsk\s+statsborgerskap|"
-    r"norsk\s+statsborgerskap\s+er\s+(?:et|en)\s+(?:krav|forutsetning)|"
-    r"(?:must|have\s+to)\s+be\s+a\s+norwegian\s+(?:citizen|national)|"
+    r"(?:(?:kan|må)\s+(?:\w+\s+){0,2}?(?:ikke|ikkje)\s+(?:inneha|ha)\s+(?:noe\s+|noko\s+)?(?:annet|anna)\s+"
+    r"(?:(?:statsborgerskap|statsborgarskap)\s+)?enn\s+norsk(?:\s+(?:statsborgerskap|statsborgarskap))?|"
+    r"må\s+(?:\w+\s+){0,3}(?:(?:være|vere)\s+nors[kt]e?\s+(?:statsborger|statsborgar)|"
+    r"ha\s+norsk\s+(?:statsborgerskap|statsborgarskap))|"
+    r"kun\s+nors[kt]e?\s+(?:statsborger|statsborgar)|"
+    r"krav\s+om\s+norsk\s+(?:statsborgerskap|statsborgarskap)|"
+    r"norsk\s+(?:statsborgerskap|statsborgarskap)\s+er\s+(?:et|en|eit)\s+(?:krav|forutsetning)|"
+    r"(?:must|have\s+to|need\s+to)\s+(?:be\s+a|hold|have)\s+norwegian\s+(?:citizen|national|citizenship)|"
+    r"(?:only\s+norwegian\s+(?:citizens|nationals)|norwegian\s+(?:citizens|nationals)\s+only)|"
     r"norwegian\s+citizenship\s+is\s+(?:required|mandatory|a\s+requirement))"
 )
+# A whole-line bullet naming the citizenship: "Norsk statsborgerskap", "Mulighet til å
+# sikkerhetsklareres og norsk statsborgerskap". Lines with a softener, a negation or an
+# alternative are left alone (the \w*-word list below).
+_CITIZENSHIP_BULLET_RE = re.compile(
+    r"^\W*(?:(?:[a-zæøå]+\s+){0,6}og\s+)?(?:(?:må\s+)?være\s+)?norsk(?:e)?\s+statsborger\w*\W*$", re.M
+)
+_CITIZENSHIP_BULLET_SOFT_RE = re.compile(r"\b(?:ikke|ikkje|uavhengig|gjerne|fordel|ønsk\w*|eller|kan|bør|helst)\b")
+# EEA-only: "Du må være EØS-borger", a bare "EU/EØS borger" bullet. The user holds a Norwegian
+# residence/work permit, so ONLY an ad that names no permit alternative counts.
+_EEA_CITIZENSHIP_RE = re.compile(
+    r"må\s+(?:\w+\s+){0,3}være\s+(?:eu/eøs|eøs|eu|nordisk)[- ]?(?:borger|statsborger)\w*|"
+    r"^\W*(?:eu/eøs|eøs)[- ]?borger\w*\W*$", re.M
+)
+_EEA_PERMIT_ALTERNATIVE_RE = re.compile(r"\beller\b|\bor\b|arbeidstillatelse|oppholdstillatelse|work permit|permit|tillatelse")
 NORWEGIAN_CITIZENSHIP_ONLY_REASON = "Вимагається лише норвезьке громадянство — недосяжно"
 
 
 def _has_norwegian_citizenship_only_requirement(text: str) -> bool:
-    return any(_match_is_firm(text, m) for m in NORWEGIAN_CITIZENSHIP_ONLY_RE.finditer(text))
-
+    if any(_match_is_firm(text, m) for m in NORWEGIAN_CITIZENSHIP_ONLY_RE.finditer(text)):
+        return True
+    for m in _CITIZENSHIP_BULLET_RE.finditer(text):
+        if not _CITIZENSHIP_BULLET_SOFT_RE.search(m.group()) and _section_before(text, m.start()) != "opt":
+            return True
+    for m in _EEA_CITIZENSHIP_RE.finditer(text):
+        cs, ce = _clause_bounds(text, m.start(), m.end())
+        if not _EEA_PERMIT_ALTERNATIVE_RE.search(text[cs:ce]) and _match_is_firm(text, m):
+            return True
+    return False
 
 
 # Employer-wide "SOME positions may need X" disclaimer. Widened 2026-10-05
@@ -557,13 +680,118 @@ _EN_CLEARANCE_NEGATED_RE = re.compile(r"not required|not a requirement")
 
 def _has_definite_security_clearance_requirement_en(text: str) -> bool:
     for m in SECURITY_CLEARANCE_EN_RE.finditer(text):
-        sentence_start = text.rfind(". ", 0, m.start()) + 1  # 0 when absent
+        # Sentence start = the clause boundary (". ", a line break, ;!?). It used to be only
+        # the last ". ", so a hedge on the PREVIOUS line leaked in: Vard's "This employment
+        # may require a pre-employment check ... \n This employment requires security
+        # clearance by NSM" kept the "may" of the line above (corpus audit 2026-11-17).
+        sentence_start = _clause_bounds(text, m.start(), m.end())[0]
         if _EN_CLEARANCE_SOFTENER_RE.search(text[sentence_start:m.start()]):
             continue
         if _EN_CLEARANCE_NEGATED_RE.search(text[m.end():m.end() + 30]):
             continue
         return True
     return False
+
+
+# --- Corpus audit 2026-11-17: ONE stem-based clearance judge --------------------
+# Seven rounds of this category each added the single verb phrasing that had just
+# slipped through. A read of every clearance sentence in the live corpus (~170
+# distinct contexts) showed the regexes above still missed ~25 real requirements:
+# the participle "kvalifisert for å bli sikkerhetsklarert, jfr. sikkerhetsloven"
+# (Kongsberg x34), "må tilfredsstille kravene til HØYESTE sikkerhetsklarering"
+# (Etterretningstjenesten x20, one word between kravene and til), "må kunne
+# klareres og autoriseres i tråd med sikkerhetslovens bestemmelser", "må kunne
+# autoriseres for ... begrenset", Nynorsk "klarerast/autoriserast ... sikkerheitslova",
+# bare bullets ("Kunne sikkerhetsklareres på nivå hemmelig", "kan sikkerhetsklareres"),
+# "(du) må sikkerhetsklareres og autoriseres på nivå hemmelig", "for stillingen må
+# sikkerhetsklarering påregnes" and "krever at du kan autoriseres". So instead of one
+# more phrasing this judges every clearance STEM mention on its own clause: it counts
+# when the clause carries a requirement cue (må/krav/forutsetning/kreves/skal være/...)
+# or is a bare eligibility bullet ("kan/kunne sikkerhetsklareres"), and not when it is
+# hedged ("kan bli aktuelt", "mulighet for", "dersom", "enkelte stillinger", English
+# "may"), negated/softened (_match_is_firm) or merely informational. The bare verbs
+# klareres/autoriseres only count with sikkerhetsloven/hemmelig/begrenset/NATO nearby,
+# so IT-access "autoriseres for tilgang" and customs "tollklarering" never match.
+_CLEARANCE_STEM_RE = re.compile(
+    r"(?:sikkerhets?|trygging(?:s)?|tryggleiks?|sikkerheits?)klar\w*|"
+    r"\bsecurity[- ]clearance|\bsecurity vetting|\bnato secret|"
+    r"\bklarer(?:es|ast|t)\b|\bklarering\b|\bautoriser(?:es|ast|t)\b|\bautorisasjon\b"
+)
+# The stem alternatives that name a clearance on their own (no law context needed).
+_CLEARANCE_SELF_EVIDENT_RE = re.compile(r"^(?:(?:sikkerhets?|trygging(?:s)?|tryggleiks?|sikkerheits?)klar|security|nato)")
+_CLEARANCE_LAW_RE = re.compile(
+    r"sikkerhetslov|sikkerheitslov|tryggingslov|tryggleikslov|sikkerhetsklar|tryggingsklar|hemmelig|hemmeleg|begrenset|avgrensa|"
+    r"konfidensiell|\bnato\b|\bnsm\b|nasjonal sikkerhetsmyndighet|klareringsmyndighet|skjermingsverdig|gradert"
+)
+_CLEARANCE_CUE_RE = re.compile(
+    r"\bmå\b|\bmust\b|\bkrav\b|\bkravet\b|\bkravene\b|\bkreves\b|\bkrever\b|\bkrevst\b|\bkrevast\b|"
+    r"forutsetning|forutsett|vilkår|\bpåkrevd|obligatorisk|påregnes|\bskal\s+(?:\w+\s+){0,3}(?:være|bli|kunne)\b|"
+    r"\brequire[sd]?\b|\brequirements?\b|\bmandatory\b|\bprerequisite\b|\bhave to\b|\bneed to\b|\bshall\b|"
+    r"\beligible\b|\bsatisfy\b|\bobtain\b|\bhold(?:s|ing)?\b|\bheld\b|\bundergo\b|\bnecessary\b"
+)
+_CLEARANCE_ELIGIBILITY_RE = re.compile(
+    r"(?:\bkunne|\bkan|\bkunna|\bevne til å|\bi stand til å|\bkvalifisert for å|\bkvalifisere (?:til|for))\s+"
+    r"(?:bli\s+|verte\s+)?(?:\w+\s+)?(?:klarer|klarert|autoriser|sikkerhets?klar|tryggingsklar|sikkerheitsklar)"
+)
+_CLEARANCE_HEDGE_RE = re.compile(
+    r"\bkan\b[^.\n]{0,30}\b(?:aktuelt|aktuell|nødvendig|påkrevd|krevd|stilt|stilles|kreves|et krav)\b|"
+    r"\bkan\s+(?:også\s+)?(?:kreve|stille|medføre|innebære|måtte)\b|\bvil\s+kunne\b|\bkunne\s+(?:bli\s+)?(?:kreve|stille)\b|"
+    r"\bkan\s+det\b|\beventuell|\bev\.|\bmulighet(?:en)?\s+(?:for|til)\b|\bdersom\b|\bhvis\b|\bom\s+nødvendig\b|"
+    r"\bved\s+behov\b|\bnår\s+(?:det\s+er\s+)?relevant|\benkelte\b|\bnoen\s+(?:av\s+)?(?:våre\s+)?stilling|"
+    r"\bbør\b|\bhelst\b|\bsenere\s+tidspunkt|\bisps\b|\bflyplass|\blufthavn|\bairport|\band/or\b|"
+    r"\bmay\b|\bmight\b|\bcould\b|\bcan\s+be\b|\bif\s+(?:required|necessary|needed|relevant|applicable)\b|"
+    r"\bwhere\s+(?:required|necessary|relevant|applicable)\b|\bdepending\b|\bcertain\b|\bsome\b|\bpossible\b|\bpotential"
+)
+
+
+_CLEARANCE_NEGATED_AFTER_RE = re.compile(r"\b(?:ikke|ikkje|not|no longer)\b")
+
+
+def _section_before(text: str, pos: int):
+    """'req'/'opt'/None - the requirement/optional heading in force at `pos`
+    (same heading vocabulary as iter_requirement_clauses, which can't be keyed by offset)."""
+    # Only a heading within the last 8 non-empty lines counts: an unrecognised heading further
+    # down ("Vi ser etter deg som har følgende kvalifikasjoner:") must not leave us in the
+    # "Om oss:" section opened a screen above (it made real requirements read as optional).
+    section, since = None, 0
+    for line in text[:pos].split("\n")[:-1]:
+        line = line.strip()
+        if not line:
+            continue
+        since += 1
+        if OPTIONAL_HEADING_RE.match(line):
+            section, since = "opt", 0
+        elif REQUIREMENT_HEADING_RE.match(line):
+            section, since = "req", 0
+    return section if since <= 8 else None
+
+
+def _clearance_mention_is_firm(text: str, m: "re.Match[str]") -> bool:
+    cs, ce = _clause_bounds(text, m.start(), m.end())
+    clause = text[cs:ce]
+    if not _CLEARANCE_SELF_EVIDENT_RE.match(m.group()) and not _CLEARANCE_LAW_RE.search(text[max(0, cs - 100):ce]):
+        return False
+    if _SOME_POSITIONS_RE.search(text[max(0, m.start() - 80):m.start()]):
+        return False
+    if _CLEARANCE_HEDGE_RE.search(clause) or not _match_is_firm(text, m):
+        return False
+    if _CLEARANCE_NEGATED_AFTER_RE.search(text[m.end():ce]):  # "Sikkerhetsklarering er ikke påkrevd."
+        return False
+    if _CLEARANCE_CUE_RE.search(clause):
+        return True
+    # No verb of obligation: a short bullet ("Kunne sikkerhetsklareres på nivå hemmelig",
+    # "kan sikkerhetsklareres") or a bare noun bullet ("Sikkerhetsklarering (nivå
+    # "konfidensielt") for tilsetting ...") counts unless it sits under an optional heading.
+    ls = text.rfind("\n", 0, m.start()) + 1
+    line = text[ls:text.find("\n", m.end()) if "\n" in text[m.end():] else len(text)].strip()
+    bare_bullet = len(line) <= 120 and not line.endswith(":") and re.match(r"\W*(?:sikkerhets?klar|tryggingsklar|security[- ]clearance)", line)
+    if (_CLEARANCE_ELIGIBILITY_RE.search(clause) and len(clause) <= 160) or bare_bullet:
+        return _section_before(text, m.start()) != "opt"
+    return False
+
+
+def _has_clearance_requirement_by_stem(text: str) -> bool:
+    return any(_clearance_mention_is_firm(text, m) for m in _CLEARANCE_STEM_RE.finditer(text))
 
 
 # International relocation-recruitment ads — BPO/customer-service agencies
@@ -652,7 +880,7 @@ REQUIREMENT_HEADING_RE = re.compile(
 )
 OPTIONAL_HEADING_RE = re.compile(
     r"^(?:ønskede kvalifikasjoner|ønskelige kvalifikasjoner|ønskelig|"
-    r"ønsket kompetanse|fordelaktig|det er en fordel(?:\s+om du har)?|vi ser gjerne|"
+    r"ønsket kompetanse|fordelaktig|det er en fordel(?:\s+om du(?:\s+også)?(?:\s+har)?)?|vi ser gjerne|"
     r"personlige egenskaper|vi tilbyr|vi kan tilby|arbeidsoppgaver|"
     r"om stillingen|andre ønsker|fordeler|"
     # "Vi tilbyr deg:" / "Hos oss får du:" / "Om oss:" (2026-10-05,
@@ -689,11 +917,14 @@ def iter_requirement_clauses(body_l: str):
         line = line.strip()
         if not line:
             continue
-        if REQUIREMENT_HEADING_RE.match(line):
-            section = "req"
-            continue
+        # Optional first: REQUIREMENT_HEADING_RE's optional prefix word swallows "Ønskede
+        # kvalifikasjoner" / "Ønskelige kvalifikasjoner" as a requirements heading, so every
+        # bullet under them used to read as REQUIRED (corpus audit 2026-11-17).
         if OPTIONAL_HEADING_RE.match(line):
             section = "opt"
+            continue
+        if REQUIREMENT_HEADING_RE.match(line):
+            section = "req"
             continue
         for clause in (p.strip() for p in _CLAUSE_SPLIT_RE.split(line)):
             if clause:
@@ -998,6 +1229,25 @@ def _has_body_authorisation_requirement(body_l: str) -> bool:
                 continue
             if not _match_is_firm(body_l, m):
                 continue
+            if not generic:
+                # Corpus audit 2026-11-17: a softener in the rest of the same line, and a bullet
+                # under an "ønskede kvalifikasjoner"-style heading that carries no hard verb.
+                cs, ce = _clause_bounds(body_l, m.start(), m.end())
+                if _AUTH_ALTERNATIVE_BEFORE_RE.search(body_l[cs:m.start()]):
+                    continue
+                if re.search(r"fortrinnsvis|primært|\bhelst\b|gjerne|foretrekk", body_l[cs:m.start()]):
+                    continue
+                # Rest of the same line (a softener LEFT of the match is handled above). Not the next
+                # line: "Norsk autorisasjon som sykepleier\nAutoriserte helsefagarbeidere ... oppfordres
+                # til å søke" softens a different group, not the sykepleier requirement.
+                line_end = body_l.find("\n", m.end())
+                rest = body_l[m.end():line_end if line_end != -1 else len(body_l)][:300]
+                soft = _AUTH_SOFT_AROUND_RE.search(rest)
+                # "(3. års sykepleierstudenter kan også søke)" opens the door to students, which he is not.
+                if soft and not re.search(r"student|nyutdann|under utdanning|studerer|venter på", rest[max(0, soft.start() - 60):soft.end() + 30]):
+                    continue
+                if _section_before(body_l, m.start()) == "opt" and not REQUIREMENT_VERB_RE.search(body_l[cs:ce]):
+                    continue
             if generic:
                 cs, ce = _clause_bounds(body_l, m.start(), m.end())
                 if "tilgang" in body_l[cs:ce]:
@@ -1005,6 +1255,112 @@ def _has_body_authorisation_requirement(body_l: str) -> bool:
                 if not _HEALTH_CONTEXT_RE.search(body_l[max(0, m.start() - 150):m.end() + 150]):
                     continue
             return True
+    return False
+
+
+# --- Corpus audit 2026-11-17: other regulated licences stated as a requirement in the BODY ----
+# The title lists above only fire when the job IS the profession. These ads carry an
+# unrelated title ("Rådgiver", "Seniorkonsulent", "Etterforsker PB3/2/1") but state the
+# licence as a qualification: "statsautorisert regnskapsfører" x14 (Aspia, Bemanningsxperten),
+# "advokatbevilling", "lønnes som politibetjent 3/2/1" / "bestått vitnemål fra
+# politihøgskole/politiskole", maritime "dekksoffisersertifikat D5", DSB electrician approval,
+# and school posts ("rektor", "undervisningsinspektør") that need "godkjent pedagogisk utdanning".
+# Each is judged like the health bullets: firm clause, no softener/alternative around it.
+REGULATED_BODY_PATTERNS = [
+    (r"\b(?:statsautorisert|statsautoriserte|registrert|registrerte)\s+(?:revisor|revisorer|regnskapsfører|regnskapsførere|"
+     r"rekneskapsførar|regnskapfører)\b|"
+     r"\bautorisert\s+(?:revisor|regnskapsfører|rekneskapsførar)\b|"
+     r"\b(?:norsk\s+)?(?:autorisasjon|bevilling)\s+som\s+(?:revisor|regnskapsfører|rekneskapsførar|advokat)\b|"
+     r"\b(?:norsk\s+)?advokatbevilling\b", "Регульована професія (право/аудит)"),
+    (r"\b(?:lønn(?:es|a|et|t)|avlønnes)\s+som\s+politi(?:betjent|overbetjent|førstebetjent|inspektør)\b|"
+     r"\b(?:vitnemål|eksamen|utdanning)\s+fra\s+politihøgskole(?:n)?(?:\s*/\s*politiskole(?:n)?)?\b",
+     "Потрібна освіта Politihøgskolen (норвезька поліцейська академія)"),
+    (r"\b(?:dekks|maskin)offiser(?:s)?-?sertifikat\w*|\bd[1-5]-?sertifikat\b|\bsertifikat\s+d[1-5]\b|"
+     r"\b(?:dekks|maskin)offiser\b[^.\n]{0,30}\bsertifikat\b|\bgyldig\s+stcw\b", "Потрібні права / морський сертифікат"),
+    (r"\bgodkjenning\s+fra\s+dsb\s+som\s+elektroinstallatør|\bbestått\s+installatørprøven|\bautorisasjon\s+fra\s+dsb\b|"
+     r"\bfagansvarlig\s+for\s+elvirksomhet", "Потрібна авторизація DSB (електромонтажні роботи)"),
+    (r"\b(?:har|må\s+ha|krav\s+om|krever|kreves|forutsetter|forutsetning)\s+(?:et\s+|en\s+)?(?:godkjent|godkjend)\s+"
+     r"(?:faglig\s+og\s+)?(?:pedagogisk|lærer|lærar)\w*(?:\s+utdann\w+)?|"
+     r"\bkrav\s+om\s+(?:godkjent\s+|godkjend\s+)?(?:lærerutdanning|lærarutdanning)|"
+     r"\bundervisningskompetanse\s+er\s+en\s+forutsetning|"
+     r"\b(?:må\s+ha|krever|krav\s+om)\s+(?:godkjent\s+)?undervisningskompetanse",
+     "Потрібна норвезька педагогічна освіта"),
+]
+# Teaching text in an ad that also hires assistants/unskilled ("Tilkallingsvikarer fagarbeidere/
+# assistenter") is a conditional sentence about the teacher posts, not a requirement of every post.
+_MIXED_STAFF_TITLE_RE = re.compile(r"assistent|fagarbeid|ufaglært|miljø|barne- og ungdomsarbeid|renhold")
+_REGULATED_ALTERNATIVE_AFTER_RE = re.compile(r"^\s*(?:eller|/|og/eller)\b")
+
+
+def _regulated_licence_reason(title_l: str, body_l: str):
+    for pattern, reason in REGULATED_BODY_PATTERNS:
+        if reason.endswith("педагогічна освіта") and _MIXED_STAFF_TITLE_RE.search(title_l):
+            continue
+        firm = soft = False
+        for m in _compile(pattern).finditer(body_l):
+            if _SOME_POSITIONS_RE.search(body_l[max(0, m.start() - 80):m.start()]):
+                continue
+            cs, ce = _clause_bounds(body_l, m.start(), m.end())
+            before, after = body_l[cs:m.start()], body_l[m.end():ce]
+            if _REGULATED_ALTERNATIVE_AFTER_RE.match(after) or _AUTH_ALTERNATIVE_BEFORE_RE.search(before):
+                continue  # an alternative, neither a requirement nor a statement that it is optional
+            if (
+                not _match_is_firm(body_l, m)
+                or re.search(r"fortrinnsvis|primært|\bhelst\b|gjerne|foretrekk|\bfor\s+(?:stilling|lærerstilling|undervisning)", before)
+                or _AUTH_SOFT_AROUND_RE.search(after)
+                or re.search(r"\beller\s+(?!høyere|høgare|bedre)", after[:40])
+                or (_section_before(body_l, m.start()) == "opt" and not REQUIREMENT_VERB_RE.search(body_l[cs:ce]))
+            ):
+                soft = True
+            else:
+                firm = True
+        # One explicitly optional mention ("Er du statsautorisert, er det et pluss, men ikke et krav")
+        # means the other mentions are not a hard requirement either.
+        if firm and not soft:
+            return reason
+    return None
+
+
+# --- Corpus audit 2026-11-17: a foreign language demanded in the BODY ------------------------
+# The title rule above only knows "svensktalende". Ads state it as a bullet: "Fluent in German",
+# "Meget gode kunnskaper i svensk og engelsk", "Du må snakke polsk og engelsk", "Language: German
+# and English - only apply if you speak German fluently" (German-speaking tour guides, Voss).
+# Counts only with a plain requirement wording and NO alternative in the clause: any
+# "eller/or/slash/and-or" ("norsk, svensk eller dansk", "Norwegian or Swedish") means the user's
+# own language qualifies, and "gode kunnskaper i X er en fordel/plus" is a preference.
+_FOREIGN_LANG_ANY = (
+    r"(?:svensk|dansk|finsk|tysk|fransk|nederlandsk|spansk|italiensk|polsk|islandsk|portugisisk|swedish|danish|finnish|"
+    r"german|french|dutch|spanish|italian|polish|icelandic|portuguese|lithuanian|latvian|estonian|czech|hungarian|"
+    r"romanian|bulgarian|greek|turkish|arabic|chinese|mandarin|japanese|korean)"
+)
+_FOREIGN_LANG_REQUIRED_RE = re.compile(
+    r"(?:\b(?:må|skal|bør)\s+(?:\w+\s+){0,3}?(?:beherske|snakke|kunne\s+snakke|ha)\s+(?:\w+\s+){0,2}?" + _FOREIGN_LANG_ANY + r"\w*|"
+    r"\b(?:flytende|fluent(?:\s+in)?|fluency\s+in|meget\s+gode|svært\s+gode|veldig\s+gode|very\s+good|excellent|native)\s+"
+    r"(?:(?:\w+\s+){0,2}?(?:kunnskaper|ferdigheter|knowledge|skills)\s+(?:i|på|of|in)\s+)?" + _FOREIGN_LANG_ANY + r"\w*|"
+    r"\b" + _FOREIGN_LANG_ANY + r"kunnskaper|"
+    r"\bonly\s+apply\s+if\s+you\s+speak\s+" + _FOREIGN_LANG_ANY + r"\b|"
+    r"\b(?:gode|good)\s+(?:ferdigheter|language\s+skills|skills)\s+(?:i|på|in)\s+" + _FOREIGN_LANG_ANY + r"\b)"
+)
+_FOREIGN_LANG_ALTERNATIVE_RE = re.compile(
+    r"\beller\b|\bor\b|/|\band/or\b|\bog/eller\b|alternativ|\bevt\b|eventuelt|\bplus\b|fordel|advantage|bonus|preferred|"
+    r"ønskelig|ønskjeleg|gjerne|forstå|understand|\bkan\s+også\b|desirable|nice to have|\bbør\b"
+)
+_NORDIC_CONTEXT_RE = re.compile(r"\bnorsk\b|\bnorwegian\b|\bskandinavisk|\bscandinavian\b|\bnordisk")
+
+
+def _has_foreign_language_requirement(body_l: str) -> bool:
+    for m in _FOREIGN_LANG_REQUIRED_RE.finditer(body_l):
+        cs, ce = _clause_bounds(body_l, m.start(), m.end())
+        clause = body_l[cs:ce]
+        if _FOREIGN_LANG_ALTERNATIVE_RE.search(clause) or not _match_is_firm(body_l, m):
+            continue
+        # "norsk og svensk" bullets: the user can read the Norwegian half only, but a clause that
+        # already names a Scandinavian/Nordic language is the "any Nordic language" family - skip.
+        if _NORDIC_CONTEXT_RE.search(clause) and not re.search(r"\bog\b|\band\b", clause):
+            continue
+        if _section_before(body_l, m.start()) == "opt" and not REQUIREMENT_VERB_RE.search(clause):
+            continue
+        return True
     return False
 
 
@@ -1038,7 +1394,18 @@ def check_exclusion(
     if _has_body_authorisation_requirement(body_l):
         return True, "В описі прямо вимагається норвезька авторизація"
 
-    if _has_definite_security_clearance_requirement(body_l) or _has_definite_security_clearance_requirement_en(body_l):
+    regulated_reason = _regulated_licence_reason(title_l, body_l)
+    if regulated_reason:
+        return True, regulated_reason
+
+    if _has_foreign_language_requirement(body_l):
+        return True, "Потрібна мова, якою я не володію (шведська/данська/німецька/польська тощо)"
+
+    if (
+        _has_definite_security_clearance_requirement(body_l)
+        or _has_definite_security_clearance_requirement_en(body_l)
+        or _has_clearance_requirement_by_stem(body_l)
+    ):
         return True, "Потрібен допуск до державної таємниці (sikkerhetsklarering) — недосяжно без громадянства"
 
     if _has_norwegian_citizenship_only_requirement(body_l):
