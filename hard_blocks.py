@@ -361,9 +361,11 @@ BODY_AUTHORISATION_PATTERNS = [
     # IKT-rådgiver, 2026-11-13). Singular profession only, so the employer
     # self-description "autorisert lærebedrift" never matches; "eller"/"/"
     # after it means an alternative ("autorisert sykepleier eller IKT-utdanning").
-    r"(?<!fortrinnsvis )\bautorisert (?:som )?(?:radiograf|sykepleier|sjukepleiar|lege|bioingeniør|fysioterapeut|"
+    # "Offentlig godkjent sykepleier" (Ahus Rådgiver IKT, 2026-11-17) is the legal synonym
+    # of "autorisert" under helsepersonelloven: same pattern, same guards.
+    r"(?<!fortrinnsvis )\b(?:autorisert|offentlig godkjent|offentlig godkjenning) (?:som )?(?:radiograf|sykepleier|sjukepleiar|lege|bioingeniør|fysioterapeut|"
     r"ergoterapeut|jordmor|psykolog|farmasøyt|helsefagarbeider|vernepleier|tannpleier|tannlege|"
-    r"hjelpepleier|ambulansearbeider|optiker|kiropraktor)\b(?!\s+(?:eller|/))"
+    r"hjelpepleier|ambulansearbeider|optiker|kiropraktor)\b(?!\s*(?:eller|/))"
     r"(?! for søkere)(?! for deg som)"
     # Alternatives / preferences are not a firm requirement: a comma list, "eller annen/tilsvarende",
     # "fortrinnsvis", "ufaglærte kan også søke" (live 2026-11-13).

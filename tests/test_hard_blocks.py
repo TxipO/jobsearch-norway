@@ -1177,3 +1177,31 @@ def test_authorised_profession_soft_or_employer_not_blocked():
         "Norsk autorisasjon kreves for søkere som er sykepleiere.",
     ]:
         assert not check_exclusion("IKT-rådgiver", body)[0], body
+
+
+def test_offentlig_godkjent_profession_blocked():
+    """Ahus Rådgiver IKT: bare bullet 'Offentlig godkjent sykepleier' — the legal
+    synonym of 'autorisert' — shares the autorisert pattern and guards."""
+    for body in [
+        "Kvalifikasjoner:\n- Offentlig godkjent sykepleier\n- Erfaring fra IKT",
+        "Du har offentlig godkjenning som sykepleier",
+        "Du er offentlig godkjent som radiograf",
+    ]:
+        excluded, reason = check_exclusion("Rådgiver IKT", body)
+        assert excluded and "авторизація" in reason, body
+
+
+def test_offentlig_godkjent_profession_soft_not_blocked():
+    for body in [
+        "Det er en fordel om du er offentlig godkjent sykepleier",
+        "Offentlig godkjent sykepleier eller IKT-utdanning",
+        "Offentlig godkjent sykepleier/IKT-utdanning",
+        "Offentlig godkjent sykepleier, eller annen relevant utdanning",
+        "Offentlig godkjent sykepleier, radiograf eller tilsvarende",
+        "Offentlig godkjent sykepleier for søkere som har helsefaglig bakgrunn",
+        "Offentlig godkjent sykepleier for deg som har helsefaglig bakgrunn",
+        "Fortrinnsvis offentlig godkjent sykepleier",
+        "Offentlig godkjent sykepleier, men ufaglærte kan også søke",
+        "Vi er en offentlig godkjent lærebedrift",
+    ]:
+        assert not check_exclusion("IKT-rådgiver", body)[0], body
