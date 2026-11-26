@@ -891,3 +891,13 @@ EasyCruit імпортував CV з дефектами: період без п�
 
 ### Статус
 подано 2026-11-23.
+
+---
+
+## 2026-11-26 — Schibsted, «IT Service Desk Technician» (англійська, Kollegia, 1551 симв.)
+
+**Вакансія:** NAV · **uuid:** `dc70571a-b4eb-4cbd-883d-d1fef21f56f0` · **оцінка:** IT 78 · Осло · snarest
+Ключ ролі — «resolve ~80% within the team / not passing problems on» → «доводив до рішення сам». ШІ в nice-to-have → абзац з погодженого Munu. Must «Professional proficiency in Norwegian or Swedish» — у листі не згадано (експеримент). Без правок. Сьома точка експерименту.
+
+### Статус
+подано 2026-11-26.
